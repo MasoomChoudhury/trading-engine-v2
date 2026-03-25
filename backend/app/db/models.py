@@ -118,3 +118,17 @@ class AppConfig(Base):
     key = Column(String, primary_key=True)
     value = Column(JSONB)
     updated_at = Column(DateTime(timezone=True), default=func.now())
+
+
+class UpstoxToken(Base):
+    """Stores Upstox access tokens received via webhook."""
+    __tablename__ = "upstox_tokens"
+
+    id = Column(BigInteger, primary_key=True, autoincrement=True)
+    user_id = Column(String, nullable=False, unique=True)  # Upstox UCC
+    client_id = Column(String, nullable=False)
+    access_token = Column(Text, nullable=False)
+    token_type = Column(String, default="Bearer")
+    expires_at = Column(DateTime(timezone=True))
+    issued_at = Column(DateTime(timezone=True))
+    received_at = Column(DateTime(timezone=True), nullable=False, default=func.now())

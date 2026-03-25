@@ -18,7 +18,7 @@ logger.add(
 # Import routes after logger is configured
 from app.api.middleware import log_api_call
 from app.services.upstox_client import upstox_client
-from app.api.routes import nifty50, logs, admin, websocket
+from app.api.routes import nifty50, logs, admin, websocket, auth, webhook
 
 
 @asynccontextmanager
@@ -71,6 +71,8 @@ app.include_router(nifty50.router)
 app.include_router(logs.router)
 app.include_router(admin.router)
 app.include_router(websocket.router)
+app.include_router(auth.router)
+app.include_router(webhook.router)
 
 
 @app.get("/")

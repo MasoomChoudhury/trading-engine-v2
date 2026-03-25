@@ -3,8 +3,11 @@ import pyotp
 import time
 import asyncio
 from typing import Any, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from app.config import get_settings
+from app.db.database import get_logs_session
+from app.db.models import UpstoxToken
+from sqlalchemy import select
 from loguru import logger
 
 settings = get_settings()
@@ -12,7 +15,13 @@ BASE_URL = "https://api.upstox.com"
 
 
 class UpstoxTokenManager:
-    """Manages Upstox OAuth2 tokens with TOTP support."""
+    """Manages Upstox OAuth2 tokens.
+
+    Priority:
+    1. In-memory cache (fastest)
+    2. Database (persisted via webhook)
+    3. TOTP flow (manual fallback)
+    """
 
     def __init__(self):
         self.access_token: Optional[str] = None
@@ -28,14 +37,70 @@ class UpstoxTokenManager:
         return totp.now()
 
     async def get_access_token(self) -> str:
-        """Get a valid access token, refreshing if needed."""
+        """Get a valid access token, trying DB first, then TOTP fallback."""
         async with self._lock:
+            # 1. Check in-memory cache
             if self.access_token and time.time() < self.token_expiry - 60:
                 return self.access_token
 
-            logger.info("Refreshing Upstox access token...")
+            # 2. Try database (token from webhook)
+            db_token = await self._get_token_from_db()
+            if db_token:
+                self.access_token = db_token["access_token"]
+                self.token_expiry = db_token["expires_at_timestamp"]
+                if time.time() < self.token_expiry - 60:
+                    logger.info("Using Upstox token from database (webhook)")
+                    return self.access_token
+
+            # 3. Fall back to TOTP flow
+            logger.warning("No valid token in DB, falling back to TOTP flow")
             await self._refresh_token()
             return self.access_token
+
+    async def _get_token_from_db(self) -> Optional[dict[str, Any]]:
+        """Fetch the latest token from the database."""
+        try:
+            async with get_logs_session() as session:
+                stmt = select(UpstoxToken).order_by(UpstoxToken.received_at.desc()).limit(1)
+                result = await session.execute(stmt)
+                row = result.scalar_one_or_none()
+                if row:
+                    return {
+                        "access_token": row.access_token,
+                        "expires_at_timestamp": row.expires_at.timestamp() if row.expires_at else 0,
+                        "issued_at": row.issued_at,
+                        "user_id": row.user_id,
+                    }
+        except Exception as e:
+            logger.warning(f"Failed to read token from DB: {e}")
+        return None
+
+    async def initiate_token_request(self) -> dict[str, Any]:
+        """Initiate Semi-Automated Token Request via Upstox.
+
+        This sends a push notification to the user's Upstox app.
+        Once they approve, Upstox sends the token via webhook to our server.
+
+        Returns the API response from Upstox.
+        """
+        if not settings.upstox_api_key or not settings.upstox_api_secret:
+            raise ValueError("Upstox API credentials not configured")
+
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.post(
+                f"{BASE_URL}/v3/login/auth/token/request/{settings.upstox_api_key}",
+                headers={
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                },
+                json={
+                    "client_secret": settings.upstox_api_secret,
+                },
+            )
+            response.raise_for_status()
+            data = response.json()
+            logger.info(f"Upstox token request initiated: {data}")
+            return data
 
     async def _refresh_token(self):
         """Use TOTP to get a new access token via the challenge flow."""

@@ -143,6 +143,17 @@ CREATE TABLE IF NOT EXISTS app_config (
     value JSONB NOT NULL,
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
+
+CREATE TABLE IF NOT EXISTS upstox_tokens (
+    id SERIAL PRIMARY KEY,
+    user_id VARCHAR(100) UNIQUE NOT NULL,
+    client_id VARCHAR(200) NOT NULL,
+    access_token TEXT NOT NULL,
+    token_type VARCHAR(50) DEFAULT 'Bearer',
+    expires_at TIMESTAMPTZ,
+    issued_at TIMESTAMPTZ,
+    received_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 " > /dev/null 2>&1 && echo "  → Logs DB tables: OK" || echo "  → Logs DB tables: FAILED"
 
 # ── 7. Trigger data refresh ──────────────────────────────────────────────
