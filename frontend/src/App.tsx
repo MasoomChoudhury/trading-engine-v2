@@ -1,10 +1,20 @@
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
 import { LayoutDashboard, ScrollText, TrendingUp, RefreshCw } from 'lucide-react';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Dashboard from './pages/Dashboard';
 import APILogs from './pages/APILogs';
 import Indicators from './pages/Indicators';
 import { useState, useCallback } from 'react';
 import { triggerRefresh } from './lib/api';
+
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 function NavBar() {
   const location = useLocation();
@@ -33,11 +43,10 @@ function NavBar() {
           <Link
             key={to}
             to={to}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-              location.pathname === to
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${location.pathname === to
                 ? 'bg-blue-600 text-white'
                 : 'text-slate-400 hover:text-white hover:bg-slate-800'
-            }`}
+              }`}
           >
             <Icon size={16} />
             {label}
@@ -58,15 +67,17 @@ function NavBar() {
 
 export default function App() {
   return (
-    <BrowserRouter>
-      <div className="min-h-screen bg-slate-950 text-slate-100">
-        <NavBar />
-        <Routes>
-          <Route path="/" element={<Dashboard />} />
-          <Route path="/indicators" element={<Indicators />} />
-          <Route path="/logs" element={<APILogs />} />
-        </Routes>
-      </div>
-    </BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <div className="min-h-screen bg-slate-950 text-slate-100">
+          <NavBar />
+          <Routes>
+            <Route path="/" element={<Dashboard />} />
+            <Route path="/indicators" element={<Indicators />} />
+            <Route path="/logs" element={<APILogs />} />
+          </Routes>
+        </div>
+      </BrowserRouter>
+    </QueryClientProvider>
   );
 }
