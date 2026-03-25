@@ -1,16 +1,17 @@
 import { useDerivedMetrics } from '../hooks/useIndicators';
 import IndicatorCard from './IndicatorCard';
 
-function interpretRSI(value: number): 'bullish' | 'bearish' | 'neutral' {
-  if (value > 70) return 'bearish';
-  if (value < 30) return 'bullish';
-  return 'neutral';
-}
-
 function interpretCPR(status: string): 'bullish' | 'bearish' | 'neutral' {
   if (status === 'above_cpr') return 'bullish';
   if (status === 'below_cpr') return 'bearish';
   return 'neutral';
+}
+
+/** Safely convert any value to a display string, applying .replace() only on actual strings. */
+function safeReplace(val: unknown): string {
+  if (typeof val === 'string') return val.replace(/_/g, ' ');
+  if (val === null || val === undefined) return '—';
+  return String(val);
 }
 
 export default function DerivedMetrics() {
@@ -32,27 +33,50 @@ export default function DerivedMetrics() {
   const m = data.metrics as Record<string, any>;
   const spot = data.spot_price;
 
+  // The backend returns nested objects (e.g. m.cpr = {status, width, ...}),
+  // so we safely drill into them with optional chaining.
+  const cprStatus = m.cpr?.status ?? m.cpr_status;
+  const cprWidth = m.cpr?.width ?? m.cpr_width;
+  const vwapStatus = m.vwap?.status ?? m.vwap_status;
+  const vwapValue = m.vwap?.true_vwap ?? m.vwap_value;
+  const vwapContext = m.vwap?.context ?? m.vwap_context ?? '';
+  const orStatus = m.opening_range?.status ?? m.opening_range_status;
+  const momentumType = m.momentum_burst?.type ?? (typeof m.momentum_burst === 'string' ? m.momentum_burst : null);
+  const gapStatus = m.gap_analysis?.status ?? m.gap_status ?? m.gap_direction;
+  const dayPhase = typeof m.day_phase === 'string' ? m.day_phase : m.day_phase?.phase;
+  const volumeZone = m.volume_profile?.poc ?? m.volume_profile_zone;
+  const swingHigh = m.swing_pivots?.swing_high ?? m.swing_high;
+  const swingLow = m.swing_pivots?.swing_low ?? m.swing_low;
+
   const metrics = [
-    { name: 'CPR Status', value: m.cpr_status?.replace(/_/g, ' ') ?? '—', interpretation: interpretCPR(m.cpr_status || '') },
-    { name: 'CPR Width', value: m.cpr_width ? `${m.cpr_width.toFixed(2)} pts` : '—', approximation: true },
-    { name: 'VWAP Status', value: m.vwap_status?.replace(/_/g, ' ') ?? '—', interpretation: 'neutral' as const },
-    { name: 'VWAP', value: m.vwap_value?.toFixed(2) ?? '—', subValue: m.vwap_context || '', approximation: true },
-    { name: 'Day Phase', value: m.day_phase?.replace(/_/g, ' ') ?? '—', interpretation: 'neutral' as const, approximation: true },
-    { name: 'Opening Range', value: m.opening_range_status?.replace(/_/g, ' ') ?? '—',
-      interpretation: m.opening_range_status === 'above_or' ? 'bullish' as const :
-                     m.opening_range_status === 'below_or' ? 'bearish' as const : 'neutral' as const, approximation: true },
-    { name: 'Momentum Burst', value: m.momentum_burst?.replace(/_/g, ' ') ?? '—',
-      interpretation: m.momentum_burst === 'bullish' ? 'bullish' as const :
-                     m.momentum_burst === 'bearish' ? 'bearish' as const : 'neutral' as const },
-    { name: 'Gap Analysis', value: m.gap_direction?.replace(/_/g, ' ') ?? '—',
-      interpretation: m.gap_direction === 'up_gap' ? 'bullish' as const :
-                     m.gap_direction === 'down_gap' ? 'bearish' as const : 'neutral' as const },
-    { name: 'PCR', value: m.pcr?.toFixed(3) ?? '—',
-      subValue: m.pcr > 1 ? 'More puts bought' : m.pcr < 0.7 ? 'More calls bought' : 'Balanced',
-      interpretation: m.pcr > 1 ? 'bearish' as const : m.pcr < 0.7 ? 'bullish' as const : 'neutral' as const },
-    { name: 'Volume Profile', value: m.volume_profile_zone || '—', approximation: true },
-    { name: 'Swing High', value: m.swing_high?.toFixed(2) ?? '—', approximation: true },
-    { name: 'Swing Low', value: m.swing_low?.toFixed(2) ?? '—', approximation: true },
+    { name: 'CPR Status', value: safeReplace(cprStatus), interpretation: interpretCPR(cprStatus || '') },
+    { name: 'CPR Width', value: cprWidth ? `${Number(cprWidth).toFixed(2)} pts` : '—', approximation: true },
+    { name: 'VWAP Status', value: safeReplace(vwapStatus), interpretation: 'neutral' as const },
+    { name: 'VWAP', value: vwapValue ? Number(vwapValue).toFixed(2) : '—', subValue: safeReplace(vwapContext), approximation: true },
+    { name: 'Day Phase', value: safeReplace(dayPhase), interpretation: 'neutral' as const, approximation: true },
+    {
+      name: 'Opening Range', value: safeReplace(orStatus),
+      interpretation: orStatus === 'above_or' ? 'bullish' as const :
+        orStatus === 'below_or' ? 'bearish' as const : 'neutral' as const, approximation: true
+    },
+    {
+      name: 'Momentum Burst', value: safeReplace(momentumType),
+      interpretation: momentumType === 'bullish_burst' ? 'bullish' as const :
+        momentumType === 'bearish_burst' ? 'bearish' as const : 'neutral' as const
+    },
+    {
+      name: 'Gap Analysis', value: safeReplace(gapStatus),
+      interpretation: gapStatus === 'gap_up' ? 'bullish' as const :
+        gapStatus === 'gap_down' ? 'bearish' as const : 'neutral' as const
+    },
+    {
+      name: 'PCR', value: m.pcr?.toFixed?.(3) ?? (typeof m.pcr === 'number' ? m.pcr.toFixed(3) : '—'),
+      subValue: (typeof m.pcr === 'number') ? (m.pcr > 1 ? 'More puts bought' : m.pcr < 0.7 ? 'More calls bought' : 'Balanced') : '',
+      interpretation: (typeof m.pcr === 'number') ? (m.pcr > 1 ? 'bearish' as const : m.pcr < 0.7 ? 'bullish' as const : 'neutral' as const) : 'neutral' as const
+    },
+    { name: 'Volume Profile', value: volumeZone ? String(typeof volumeZone === 'number' ? Number(volumeZone).toFixed(2) : volumeZone) : '—', approximation: true },
+    { name: 'Swing High', value: swingHigh ? Number(swingHigh).toFixed(2) : '—', approximation: true },
+    { name: 'Swing Low', value: swingLow ? Number(swingLow).toFixed(2) : '—', approximation: true },
   ];
 
   return (

@@ -57,7 +57,7 @@ export default function GEXPanel() {
         <div className="flex items-center gap-3">
           {regimeIcon(gex.regime)}
           <div>
-            <p className="font-semibold capitalize">{gex.regime.replace('_', ' ')}</p>
+            <p className="font-semibold capitalize">{typeof gex.regime === 'string' ? gex.regime.replace(/_/g, ' ') : String(gex.regime ?? 'unknown')}</p>
             <p className="text-xs text-slate-400 mt-0.5">{gex.regime_description}</p>
           </div>
         </div>
