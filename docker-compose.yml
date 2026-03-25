@@ -1,0 +1,98 @@
+version: '3.9'
+
+services:
+  # ── TimescaleDB for time-series indicator data ────────────────────────────
+  timescale:
+    image: timescale/timescaledb:latest-pg16
+    container_name: nifty50-timescale
+    environment:
+      POSTGRES_USER: nifty50
+      POSTGRES_PASSWORD: nifty50pass
+      POSTGRES_DB: nifty50_timeseries
+    volumes:
+      - nifty50_timescale_data:/var/lib/postgresql/data
+      - ./backend/scripts/init_db.sql:/docker-entrypoint-initdb.d/init_db.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nifty50"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nifty50_net
+    restart: unless-stopped
+
+  # ── PostgreSQL for API logs ─────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: nifty50-postgres
+    environment:
+      POSTGRES_USER: nifty50logs
+      POSTGRES_PASSWORD: nifty50logspass
+      POSTGRES_DB: nifty50_logs
+    volumes:
+      - nifty50_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nifty50logs"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - nifty50_net
+    restart: unless-stopped
+
+  # ── FastAPI Backend ──────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: nifty50-backend
+    ports:
+      - "8001:8000"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      - DATABASE_URL=postgresql+asyncpg://nifty50:nifty50pass@nifty50-timescale:5432/nifty50_timeseries
+      - LOGS_DATABASE_URL=postgresql+asyncpg://nifty50logs:nifty50logspass@nifty50-postgres:5432/nifty50_logs
+      - TZ=Asia/Kolkata
+    env_file:
+      - .env
+    depends_on:
+      timescale:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - ./backend/app:/app/app
+    networks:
+      - nifty50_net
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8000/api/v1/health')\" || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+
+  # ── React Frontend (nginx) ────────────────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: nifty50-frontend
+    ports:
+      - "3001:80"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    depends_on:
+      - backend
+    networks:
+      - nifty50_net
+    restart: unless-stopped
+
+networks:
+  nifty50_net:
+    driver: bridge
+
+volumes:
+  nifty50_timescale_data:
+  nifty50_postgres_data:
