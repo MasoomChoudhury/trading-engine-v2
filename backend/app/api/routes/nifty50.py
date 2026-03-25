@@ -265,7 +265,17 @@ async def get_gex(expiry_date: str | None = Query(default=None)):
     if not expiry_date:
         contracts = await upstox_client.get_option_contracts(NIFTY_KEY)
         if contracts:
-            expiry_date = contracts[0].get("expiry", "")
+            # Pick the nearest upcoming expiry (contracts may be unsorted, so sort by date)
+            from datetime import datetime
+            valid_expiries = [
+                c.get("expiry", "") for c in contracts
+                if c.get("expiry", "") and c.get("expiry", "") >= ist_now().strftime("%Y-%m-%d")
+            ]
+            if valid_expiries:
+                valid_expiries.sort()
+                expiry_date = valid_expiries[0]
+            else:
+                expiry_date = contracts[0].get("expiry", "")
         if not expiry_date:
             expiry_date = (ist_now() + timedelta(days=7)).strftime("%Y-%m-%d")
 

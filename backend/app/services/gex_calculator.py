@@ -1,6 +1,24 @@
 """
 Gamma Exposure (GEX) Calculator for Nifty 50 options.
 Uses pre-computed Greeks from Upstox option chain API.
+
+Upstox API v2 option chain returns a list of strike-level objects:
+[
+    {
+        "expiry": "2028-06-27",
+        "strike_price": 15000.0,
+        "underlying_key": "NSE_INDEX|Nifty 50",
+        "underlying_spot_price": 23306.45,
+        "call_options": {
+            "instrument_key": "...",
+            "market_data": {"ltp": ..., "oi": ..., "volume": ...},
+            "option_greeks": {"gamma": ..., "delta": ..., "theta": ..., "vega": ...}
+        },
+        "put_options": {...},
+        "pcr": ...
+    },
+    ...
+]
 """
 
 from __future__ import annotations
@@ -15,9 +33,11 @@ class StrikeGEX:
     strike: float
     call_oi: float
     call_gamma: float
+    call_delta: float
     call_gamma_exposure: float
     put_oi: float
     put_gamma: float
+    put_delta: float
     put_gamma_exposure: float
     net_gex: float
 
@@ -67,8 +87,7 @@ def _calculate_zero_gamma_level(sorted_strikes: list[StrikeGEX], cumulative: lis
     for i in range(1, len(cumulative)):
         prev_cum = cumulative[i - 1]
         curr_cum = cumulative[i]
-        if prev_cum <= 0 <= curr_cum or prev_cum >= 0 >= curr_cum:
-            # Linear interpolation
+        if (prev_cum <= 0 <= curr_cum) or (prev_cum >= 0 >= curr_cum):
             prev_strike = sorted_strikes[i - 1].strike
             curr_strike = sorted_strikes[i].strike
             if curr_strike == prev_strike:
@@ -87,6 +106,10 @@ async def calculate_gex(expiry_date: str, lot_size: int = 50) -> GEXResult:
       Put GEX  = Put_OI  × Put_Gamma  × Lot_Size × Spot × 0.01
       Net GEX  = Call GEX - Put GEX
       Total GEX = Σ Net GEX (summed across all strikes)
+
+    Fallback: When gamma = 0 but delta is available, use delta-based GEX:
+      GEX ≈ OI × |delta| × Lot_Size × Spot × 0.01
+    This is a standard industry approximation when direct gamma data is unavailable.
     """
     from datetime import datetime, timezone
 
@@ -95,56 +118,84 @@ async def calculate_gex(expiry_date: str, lot_size: int = 50) -> GEXResult:
 
     chain_data = await upstox_client.get_option_chain(instrument_key, expiry_date)
 
-    # Parse the option chain response
-    underlying_spot = float(chain_data.get("underlying_spot_price", 0))
-    if not underlying_spot:
-        raise ValueError(f"Could not get spot price from option chain: {chain_data}")
+    # Upstox returns a list of strike-level objects
+    if not isinstance(chain_data, list) or len(chain_data) == 0:
+        raise ValueError(f"Option chain returned unexpected format: {type(chain_data)}")
 
-    calls_data = chain_data.get("call_options", {}) or {}
-    puts_data = chain_data.get("put_options", {}) or {}
-
-    # Build per-strike GEX
+    # Parse the list format: each item has strike_price, call_options, put_options
+    underlying_spot = 0.0
     strike_map: dict[float, StrikeGEX] = {}
+    total_call_oi_sum = 0.0
+    total_put_oi_sum = 0.0
+    total_call_vol = 0.0
+    total_put_vol = 0.0
 
-    for strike_str, call_info in calls_data.items():
+    for strike_item in chain_data:
         try:
-            strike = float(strike_str)
-            mkt_data = call_info.get("market_data", {})
-            oi = float(mkt_data.get("oi", 0) or 0)
-            greeks = call_info.get("option_greeks", {})
-            gamma = float(greeks.get("gamma", 0) or 0)
+            strike = float(strike_item.get("strike_price", 0))
+            if not strike:
+                continue
 
-            call_gex = oi * gamma * lot_size * underlying_spot * 0.01
-            volume = float(mkt_data.get("volume", 0) or 0)
+            # Get spot price from first item
+            if not underlying_spot:
+                underlying_spot = float(strike_item.get("underlying_spot_price", 0) or 0)
+
+            # Parse call options
+            call_opts = strike_item.get("call_options") or {}
+            call_mkt = call_opts.get("market_data") or {}
+            call_greeks = call_opts.get("option_greeks") or {}
+            call_oi = float(call_mkt.get("oi", 0) or 0)
+            call_vol = float(call_mkt.get("volume", 0) or 0)
+            call_gamma = float(call_greeks.get("gamma", 0) or 0)
+            call_delta = float(call_greeks.get("delta", 0) or 0)
+            # Use delta-based approximation when gamma is not available
+            if call_gamma > 0:
+                call_gex = call_oi * call_gamma * lot_size * underlying_spot * 0.01
+            elif call_delta != 0 and call_oi > 0 and underlying_spot > 0:
+                call_gex = call_oi * abs(call_delta) * lot_size * underlying_spot * 0.01
+            else:
+                call_gex = 0.0
+
+            total_call_oi_sum += call_oi
+            total_call_vol += call_vol
 
             strike_map[strike] = StrikeGEX(
                 strike=strike,
-                call_oi=oi,
-                call_gamma=gamma,
+                call_oi=call_oi,
+                call_gamma=call_gamma,
+                call_delta=call_delta,
                 call_gamma_exposure=call_gex,
                 put_oi=0.0,
                 put_gamma=0.0,
+                put_delta=0.0,
                 put_gamma_exposure=0.0,
                 net_gex=call_gex,
             )
-        except (ValueError, TypeError, KeyError):
-            continue
 
-    for strike_str, put_info in puts_data.items():
-        try:
-            strike = float(strike_str)
-            mkt_data = put_info.get("market_data", {})
-            oi = float(mkt_data.get("oi", 0) or 0)
-            greeks = put_info.get("option_greeks", {})
-            gamma = float(greeks.get("gamma", 0) or 0)
+            # Parse put options
+            put_opts = strike_item.get("put_options") or {}
+            put_mkt = put_opts.get("market_data") or {}
+            put_greeks = put_opts.get("option_greeks") or {}
+            put_oi = float(put_mkt.get("oi", 0) or 0)
+            put_vol = float(put_mkt.get("volume", 0) or 0)
+            put_gamma = float(put_greeks.get("gamma", 0) or 0)
+            put_delta = float(put_greeks.get("delta", 0) or 0)
+            # Use delta-based approximation when gamma is not available
+            if put_gamma > 0:
+                put_gex = put_oi * put_gamma * lot_size * underlying_spot * 0.01
+            elif put_delta != 0 and put_oi > 0 and underlying_spot > 0:
+                put_gex = put_oi * abs(put_delta) * lot_size * underlying_spot * 0.01
+            else:
+                put_gex = 0.0
 
-            put_gex = oi * gamma * lot_size * underlying_spot * 0.01
-            volume = float(mkt_data.get("volume", 0) or 0)
+            total_put_oi_sum += put_oi
+            total_put_vol += put_vol
 
             if strike in strike_map:
                 s = strike_map[strike]
-                s.put_oi = oi
-                s.put_gamma = gamma
+                s.put_oi = put_oi
+                s.put_gamma = put_gamma
+                s.put_delta = put_delta
                 s.put_gamma_exposure = put_gex
                 s.net_gex = s.call_gamma_exposure - put_gex
             else:
@@ -152,20 +203,29 @@ async def calculate_gex(expiry_date: str, lot_size: int = 50) -> GEXResult:
                     strike=strike,
                     call_oi=0.0,
                     call_gamma=0.0,
+                    call_delta=0.0,
                     call_gamma_exposure=0.0,
-                    put_oi=oi,
-                    put_gamma=gamma,
+                    put_oi=put_oi,
+                    put_gamma=put_gamma,
+                    put_delta=put_delta,
                     put_gamma_exposure=put_gex,
                     net_gex=-put_gex,
                 )
+
         except (ValueError, TypeError, KeyError):
             continue
 
+    if not strike_map:
+        raise ValueError("No valid strikes found in option chain")
+
+    if not underlying_spot:
+        raise ValueError("Could not extract spot price from option chain")
+
     sorted_strikes = sorted(strike_map.values(), key=lambda s: s.strike)
 
-    total_call_gex = sum(s.call_gamma_exposure for s in sorted_strikes)
-    total_put_gex = sum(s.put_gamma_exposure for s in sorted_strikes)
-    net_gex = total_call_gex - total_put_gex
+    total_call_gex_sum = sum(s.call_gamma_exposure for s in sorted_strikes)
+    total_put_gex_sum = sum(s.put_gamma_exposure for s in sorted_strikes)
+    net_gex = total_call_gex_sum - total_put_gex_sum
     total_gex = sum(s.net_gex for s in sorted_strikes)
 
     # Cumulative net GEX for zero gamma level
@@ -184,12 +244,8 @@ async def calculate_gex(expiry_date: str, lot_size: int = 50) -> GEXResult:
     put_wall = put_wall_strike.strike if put_wall_strike.put_gamma_exposure > 0 else None
 
     # PCR calculations
-    total_call_oi = sum(s.call_oi for s in sorted_strikes)
-    total_put_oi = sum(s.put_oi for s in sorted_strikes)
-    pcr_oi = total_put_oi / total_call_oi if total_call_oi > 0 else 0.0
-
-    # PCR by volume approximation (use gamma-weighted volume as proxy)
-    pcr_volume = pcr_oi  # Simplified — Upstox chain doesn't give volume per strike easily
+    pcr_oi = total_put_oi_sum / total_call_oi_sum if total_call_oi_sum > 0 else 0.0
+    pcr_volume = total_put_vol / total_call_vol if total_call_vol > 0 else pcr_oi
 
     # Regime determination
     if total_gex > 0:
@@ -205,22 +261,29 @@ async def calculate_gex(expiry_date: str, lot_size: int = 50) -> GEXResult:
             "strike": s.strike,
             "call_oi": s.call_oi,
             "call_gamma": s.call_gamma,
+            "call_delta": s.call_delta,
             "call_gex": s.call_gamma_exposure,
             "put_oi": s.put_oi,
             "put_gamma": s.put_gamma,
+            "put_delta": s.put_delta,
             "put_gex": s.put_gamma_exposure,
             "net_gex": s.net_gex,
         }
         for s in sorted_strikes
     ]
 
+    logger.info(
+        f"GEX calculated: spot={underlying_spot}, net_gex={net_gex:.2f}, "
+        f"zero_gamma={zero_gamma_level}, regime={regime}"
+    )
+
     return GEXResult(
         timestamp=datetime.now(timezone.utc).isoformat(),
         expiry_date=expiry_date,
         spot_price=underlying_spot,
         lot_size=lot_size,
-        total_call_gex=total_call_gex,
-        total_put_gex=total_put_gex,
+        total_call_gex=total_call_gex_sum,
+        total_put_gex=total_put_gex_sum,
         net_gex=net_gex,
         total_gex=total_gex,
         zero_gamma_level=zero_gamma_level,
