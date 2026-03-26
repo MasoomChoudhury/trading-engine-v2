@@ -24,9 +24,9 @@ class UpstoxTokenPayload(BaseModel):
     user_id: str
     access_token: str
     token_type: str = "Bearer"
-    expires_at: str  # Unix timestamp in ms, e.g. "1731448800000"
-    issued_at: str    # Unix timestamp in ms
-    message_type: str  # Should be "access_token"
+    expires_at: int = 0   # Unix timestamp in milliseconds
+    issued_at: int = 0    # Unix timestamp in milliseconds
+    message_type: str      # Should be "access_token"
 
 
 @router.post("/upstox-token")
@@ -57,10 +57,10 @@ async def receive_upstox_token(request: Request):
     # Convert Unix timestamps (ms) to datetime
     try:
         expires_at = datetime.fromtimestamp(
-            int(payload.expires_at) / 1000, tz=timezone.utc
+            payload.expires_at / 1000, tz=timezone.utc
         )
         issued_at = datetime.fromtimestamp(
-            int(payload.issued_at) / 1000, tz=timezone.utc
+            payload.issued_at / 1000, tz=timezone.utc
         )
     except (ValueError, OSError) as e:
         logger.error(f"Failed to parse timestamps: {e}")
