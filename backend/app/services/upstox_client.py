@@ -341,6 +341,67 @@ class UpstoxClient:
         path = "/v3/market-status"
         return await self._request("GET", path, authenticated=False)
 
+    # ─── Market Holidays ────────────────────────────────────────────────────
+
+    async def get_market_holidays(self, date: str | None = None) -> dict[str, Any]:
+        """Fetch market holidays. If date is provided, returns holiday info for that date.
+
+        Args:
+            date: Date string in 'YYYY-MM-DD' format. If None, returns all holidays for current year.
+
+        Returns:
+            Full API response dict with 'status' and 'data' keys.
+            data is a list of holiday objects.
+        """
+        path = "/v2/market/holidays"
+        if date:
+            path = f"/v2/market/holidays/{date}"
+        # Use low-level httpx to get raw JSON (bypassing _request's data-unwrapping)
+        access_token = await token_manager.get_access_token()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            response = await client.get(
+                f"{self.base_url}{path}",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
+
+    def is_nse_closed_on_date(
+        self, holidays_data: dict[str, Any], date: str
+    ) -> bool:
+        """Check if NSE is closed on a given date based on holidays API response.
+
+        Returns True if NSE (or NFO) is explicitly in closed_exchanges,
+        or if the holiday_type is TRADING_HOLIDAY and NSE is not in open_exchanges.
+        """
+        if holidays_data.get("status") != "success":
+            return False
+
+        holidays = holidays_data.get("data") or []
+        for holiday in holidays:
+            if holiday.get("date") != date:
+                continue
+
+            holiday_type = holiday.get("holiday_type", "")
+            closed_exchanges: list = holiday.get("closed_exchanges") or []
+            open_exchanges: list = holiday.get("open_exchanges") or []
+
+            # TRADING_HOLIDAY means no equity/derivative trading
+            if holiday_type == "TRADING_HOLIDAY":
+                nse_closed = "NSE" in closed_exchanges
+                nfo_closed = "NFO" in closed_exchanges
+                # Also check if NSE is not in open_exchanges (explicitly closed)
+                nse_open = any(
+                    e.get("exchange") == "NSE" for e in open_exchanges
+                )
+                if nse_closed or nfo_closed or not nse_open:
+                    return True
+        return False
+
     # ─── WebSocket Authorization ──────────────────────────────────────────────
 
     async def get_websocket_url(self) -> str:
