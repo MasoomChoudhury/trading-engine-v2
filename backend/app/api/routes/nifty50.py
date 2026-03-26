@@ -212,8 +212,15 @@ async def get_indicators(
         "vwap": indicators.get("vwap_value"),
     }
 
+    # Use the last candle's timestamp as the actual data time
+    last_candle_time = candles[-1][0] if candles else None
+    if last_candle_time:
+        data_timestamp = last_candle_time.isoformat()
+    else:
+        data_timestamp = ist_now().isoformat()
+
     return IndicatorResponse(
-        timestamp=ist_now().isoformat(),
+        timestamp=data_timestamp,
         symbol=SYMBOL,
         indicators={k: v for k, v in indicators.items() if v is not None},
         spot_price=spot_price,

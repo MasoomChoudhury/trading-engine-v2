@@ -21,6 +21,19 @@ export interface Health {
 }
 export const getHealth = () => fetcher<Health>('/v1/admin/health');
 
+// ─── Market Status ────────────────────────────────────────────────────────
+export interface TodayMarketStatus {
+  is_holiday: boolean;
+  holiday_description: string | null;
+  is_market_open: boolean;
+  nse_status: string | null;
+  last_updated: string | null;
+  next_holiday: string | null;
+  next_holiday_desc: string | null;
+  message: string;
+}
+export const getTodayMarketStatus = () => fetcher<TodayMarketStatus>('/v1/auth/market-status');
+
 // ─── Live Price ────────────────────────────────────────────────────────────
 export interface LivePrice {
   symbol: string;

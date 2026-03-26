@@ -70,15 +70,14 @@ async def trigger_refresh():
 
         # Market status
         try:
-            market_data = await upstox_client.get_market_status()
-            statuses = market_data.get("data", [])
+            market_data = await upstox_client.get_market_status("NSE")
+            status_item = market_data.get("data") or {}
             async with get_logs_session() as session:
-                for item in statuses:
-                    entry = MarketStatusLog(
-                        status=item.get("status", ""),
-                        segment=item.get("segment", ""),
-                    )
-                    session.add(entry)
+                entry = MarketStatusLog(
+                    status=status_item.get("status", ""),
+                    segment="NSE",
+                )
+                session.add(entry)
                 await session.commit()
         except Exception as e:
             logger.warning(f"Market status fetch failed: {e}")

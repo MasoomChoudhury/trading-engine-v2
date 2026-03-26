@@ -124,7 +124,10 @@ export default function GEXPanel() {
       </div>
 
       <p className="text-xs text-slate-600 mt-3">
-        Updated: {new Date(gex.timestamp).toLocaleString('en-IN')}
+        GEX as of: {new Date(gex.timestamp).toLocaleString('en-IN', {
+          day: '2-digit', month: 'short', year: 'numeric',
+          hour: '2-digit', minute: '2-digit', hour12: true,
+        })} IST
       </p>
     </div>
   );

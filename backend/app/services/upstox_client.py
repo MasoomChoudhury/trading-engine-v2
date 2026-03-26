@@ -336,10 +336,20 @@ class UpstoxClient:
 
     # ─── Market Status ────────────────────────────────────────────────────────
 
-    async def get_market_status(self) -> dict[str, Any]:
-        """Get market status for all segments."""
-        path = "/v3/market-status"
-        return await self._request("GET", path, authenticated=False)
+    async def get_market_status(self, exchange: str = "NSE") -> dict[str, Any]:
+        """Get market status for a specific exchange (requires auth)."""
+        access_token = await token_manager.get_access_token()
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            response = await client.get(
+                f"{self.base_url}/v2/market/status/{exchange}",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+            response.raise_for_status()
+            return response.json()
 
     # ─── Market Holidays ────────────────────────────────────────────────────
 

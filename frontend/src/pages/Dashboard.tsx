@@ -2,6 +2,7 @@ import LivePrice from '../components/LivePrice';
 import IndicatorCard from '../components/IndicatorCard';
 import GEXPanel from '../components/GEXPanel';
 import DerivedMetrics from '../components/DerivedMetrics';
+import MarketStatusBanner from '../components/MarketStatusBanner';
 import { useIndicators } from '../hooks/useIndicators';
 import { Loader2 } from 'lucide-react';
 
@@ -76,6 +77,7 @@ export default function Dashboard() {
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
       <LivePrice />
+      <MarketStatusBanner />
       <GEXPanel />
 
       <div className="bg-slate-900 border border-slate-700 rounded-xl p-6">
@@ -160,7 +162,10 @@ export default function Dashboard() {
 
         {ind && (
           <p className="text-xs text-slate-600 mt-4">
-            Last updated: {new Date(ind.timestamp).toLocaleString('en-IN')} · Interval: 5min
+            Data as of: {new Date(ind.timestamp).toLocaleString('en-IN', {
+              day: '2-digit', month: 'short', year: 'numeric',
+              hour: '2-digit', minute: '2-digit', hour12: true,
+            })} IST · Interval: 5min
           </p>
         )}
       </div>

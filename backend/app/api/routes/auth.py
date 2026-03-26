@@ -37,6 +37,17 @@ class MarketOpenCheckResponse(BaseModel):
     message: str
 
 
+class MarketStatusResponse(BaseModel):
+    is_holiday: bool
+    holiday_description: str | None = None
+    is_market_open: bool
+    nse_status: str | None = None
+    last_updated: str | None = None
+    next_holiday: str | None = None
+    next_holiday_desc: str | None = None
+    message: str
+
+
 @router.post("/request-token", response_model=TokenRequestResponse)
 async def request_upstox_token():
     """
@@ -183,4 +194,125 @@ async def check_market_and_trigger():
         holiday_description=None,
         token_triggered=True,
         message=f"Market open on {next_day}. Token request sent. Approve the Upstox push notification.",
+    )
+
+
+def _today_ist() -> str:
+    """Return today's date in IST as YYYY-MM-DD."""
+    now_utc = datetime.now(timezone.utc)
+    ist_offset = timedelta(hours=5, minutes=30)
+    now_ist = now_utc + ist_offset
+    return now_ist.strftime("%Y-%m-%d")
+
+
+# Valid NSE market statuses — anything not in this list means market is closed
+OPEN_STATUSES = {"NORMAL_OPEN", "PRE_OPEN", "OPEN", "EXTENDED_OPEN"}
+
+
+@router.get("/market-status", response_model=MarketStatusResponse)
+async def get_market_status_info():
+    """
+    Returns market status info for today — used by the frontend to display
+    a banner if today is a holiday and the market is closed.
+    """
+    today = _today_ist()
+    logger.info(f"Fetching market status for today: {today}")
+
+    nse_status: str | None = None
+    last_updated: str | None = None
+    is_open = False
+
+    # 1. Get NSE market status
+    try:
+        import httpx
+        access_token = await token_manager.get_access_token()
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.get(
+                "https://api.upstox.com/v2/market/status/NSE",
+                headers={
+                    "Authorization": f"Bearer {access_token}",
+                    "Accept": "application/json",
+                    "Content-Type": "application/json",
+                },
+            )
+            if r.status_code == 200:
+                data = r.json().get("data") or {}
+                nse_status = data.get("status")
+                raw_ts = data.get("last_updated")
+                if raw_ts:
+                    from datetime import datetime as dt
+                    last_updated = dt.fromtimestamp(
+                        raw_ts / 1000, tz=timezone.utc
+                    ).strftime("%Y-%m-%d %H:%M:%S UTC")
+                is_open = nse_status in OPEN_STATUSES
+    except Exception as e:
+        logger.warning(f"Could not fetch NSE market status: {e}")
+
+    # 2. Check if today is a holiday
+    is_holiday = False
+    holiday_desc: str | None = None
+    next_holiday: str | None = None
+    next_holiday_desc: str | None = None
+
+    try:
+        # Fetch all holidays for the year to find the next one
+        holidays_year = await upstox_client.get_market_holidays()
+        holidays_today = await upstox_client.get_market_holidays(today)
+
+        if holidays_today.get("status") == "success":
+            is_holiday = upstox_client.is_nse_closed_on_date(holidays_today, today)
+
+        # Find next upcoming holiday
+        if holidays_year.get("status") == "success":
+            from datetime import datetime as dt
+            year_holidays = holidays_year.get("data") or []
+            today_dt = dt.strptime(today, "%Y-%m-%d").date()
+            upcoming = [
+                h for h in year_holidays
+                if h.get("date", "") >= today
+                and upstox_client.is_nse_closed_on_date(
+                    {"status": "success", "data": [h]}, h.get("date", "")
+                )
+            ]
+            if upcoming:
+                next_holiday = upcoming[0].get("date")
+                next_holiday_desc = upcoming[0].get("description")
+    except Exception as e:
+        logger.warning(f"Could not fetch holiday data: {e}")
+
+    # Get today's holiday description if applicable
+    if is_holiday:
+        try:
+            holidays_today = await upstox_client.get_market_holidays(today)
+            for h in (holidays_today.get("data") or []):
+                if h.get("date") == today:
+                    holiday_desc = h.get("description")
+                    break
+        except Exception:
+            pass
+
+    # Determine message
+    if is_holiday and not is_open:
+        message = f"Today ({today}) is a market holiday: {holiday_desc or 'Trading Holiday'}"
+    elif is_open:
+        message = f"Market is open. NSE status: {nse_status}"
+    elif nse_status:
+        message = f"Market is closed. NSE status: {nse_status}"
+    else:
+        message = "Could not determine market status"
+
+    logger.info(
+        f"Market status: holiday={is_holiday}, open={is_open}, "
+        f"nse_status={nse_status}, today={today}"
+    )
+
+    return MarketStatusResponse(
+        is_holiday=is_holiday,
+        holiday_description=holiday_desc,
+        is_market_open=is_open,
+        nse_status=nse_status,
+        last_updated=last_updated,
+        next_holiday=next_holiday,
+        next_holiday_desc=next_holiday_desc,
+        message=message,
     )

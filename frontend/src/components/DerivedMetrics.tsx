@@ -104,6 +104,14 @@ export default function DerivedMetrics() {
           />
         ))}
       </div>
+      {data.timestamp && (
+        <p className="text-xs text-slate-600 mt-4">
+          Data as of: {new Date(data.timestamp).toLocaleString('en-IN', {
+            day: '2-digit', month: 'short', year: 'numeric',
+            hour: '2-digit', minute: '2-digit', hour12: true,
+          })} IST
+        </p>
+      )}
     </div>
   );
 }
