@@ -310,12 +310,13 @@ class UpstoxClient:
     # ─── Market Quote (Public) ───────────────────────────────────────────────
 
     async def get_ltp_quote(self, instrument_key: str) -> dict[str, Any]:
-        """Get last-traded price quote (public)."""
+        """Get last-traded price quote (requires auth)."""
         path = "/v3/market-quote/ltp"
         data = await self._request(
-            "GET", path, authenticated=False, params={"instrument_key": instrument_key}
+            "GET", path, authenticated=True, params={"instrument_key": instrument_key}
         )
-        return data.get(instrument_key, {})
+        # Response key uses ":" separator (e.g. "NSE_INDEX:Nifty 50"), not "|"
+        return data.get(instrument_key.replace("|", ":"), {})
 
     async def get_ohlc_quote(self, instrument_key: str) -> dict[str, Any]:
         """Get OHLC quote (public)."""
