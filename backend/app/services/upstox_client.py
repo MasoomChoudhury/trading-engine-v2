@@ -39,18 +39,29 @@ class UpstoxTokenManager:
     async def get_access_token(self) -> str:
         """Get a valid access token, trying DB first, then TOTP fallback."""
         async with self._lock:
-            # 1. Check in-memory cache
-            if self.access_token and time.time() < self.token_expiry - 60:
+            now = time.time()
+
+            # 1. Always check database for the newest valid token (handles webhook refresh)
+            db_token = await self._get_token_from_db()
+
+            if db_token and db_token.get("expires_at_timestamp", 0) > now + 60:
+                # DB has a valid token — use it, even if cache has one
+                if self.access_token != db_token["access_token"]:
+                    logger.info(
+                        f"Using Upstox token from database (webhook), "
+                        f"expires at {datetime.fromtimestamp(db_token['expires_at_timestamp'], tz=timezone.utc)}"
+                    )
+                    self.access_token = db_token["access_token"]
+                    self.token_expiry = db_token["expires_at_timestamp"]
+                else:
+                    # Same token, check if cache expiry is reasonable
+                    if self.token_expiry < db_token["expires_at_timestamp"]:
+                        self.token_expiry = db_token["expires_at_timestamp"]
                 return self.access_token
 
-            # 2. Try database (token from webhook)
-            db_token = await self._get_token_from_db()
-            if db_token:
-                self.access_token = db_token["access_token"]
-                self.token_expiry = db_token["expires_at_timestamp"]
-                if time.time() < self.token_expiry - 60:
-                    logger.info("Using Upstox token from database (webhook)")
-                    return self.access_token
+            # 2. Check in-memory cache (fallback for when DB is unavailable)
+            if self.access_token and now < self.token_expiry - 60:
+                return self.access_token
 
             # 3. Fall back to TOTP flow
             logger.warning("No valid token in DB, falling back to TOTP flow")
