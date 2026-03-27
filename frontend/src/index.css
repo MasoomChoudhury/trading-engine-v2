@@ -1,6 +1,12 @@
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
+/* v2 */
+
+:root {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+}
 
 body {
   font-family: 'Inter', system-ui, -apple-system, sans-serif;
@@ -9,16 +15,93 @@ body {
   margin: 0;
 }
 
+/* ── Scrollbar ─────────────────────────────────────────────────────────────── */
 ::-webkit-scrollbar {
   width: 6px;
   height: 6px;
 }
-
 ::-webkit-scrollbar-track {
   background: #1e293b;
 }
-
 ::-webkit-scrollbar-thumb {
   background: #475569;
   border-radius: 3px;
+}
+
+/* ── Page entry animation ──────────────────────────────────────────────────── */
+@keyframes fadeUp {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page-enter {
+  animation: fadeUp 280ms var(--ease-out) both;
+}
+
+/* ── Stat card ─────────────────────────────────────────────────────────────── */
+/* Subtle lift-on-hover, animated ring brightness */
+.stat-card {
+  background: rgba(30, 41, 59, 0.85);
+  border-radius: 0.5rem;
+  padding: 1rem;
+  box-shadow:
+    0 1px 4px rgba(0, 0, 0, 0.35),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+  transition:
+    transform 200ms cubic-bezier(0.23, 1, 0.32, 1),
+    box-shadow 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@media (hover: hover) {
+  .stat-card:hover {
+    transform: translateY(-2px);
+    box-shadow:
+      0 8px 24px rgba(0, 0, 0, 0.4),
+      inset 0 0 0 1px rgba(255, 255, 255, 0.11);
+  }
+}
+
+/* ── Chart card ────────────────────────────────────────────────────────────── */
+.chart-card {
+  background: #1e293b;
+  border-radius: 0.75rem;
+  padding: 1.25rem;
+  box-shadow:
+    0 4px 20px rgba(0, 0, 0, 0.25),
+    inset 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* ── Ghost button ──────────────────────────────────────────────────────────── */
+/* Used for toggle-style secondary buttons throughout the app */
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0.75rem;
+  border-radius: 0.5rem;
+  font-size: 0.875rem;
+  color: #cbd5e1;
+  background: rgba(30, 41, 59, 0.8);
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+  transition:
+    background-color 150ms cubic-bezier(0.23, 1, 0.32, 1),
+    transform 150ms cubic-bezier(0.23, 1, 0.32, 1),
+    box-shadow 150ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+
+@media (hover: hover) {
+  .btn-ghost:hover {
+    background: rgba(51, 65, 85, 0.9);
+    box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.12);
+  }
+}
+
+.btn-ghost:active {
+  transform: scale(0.97);
 }

@@ -1,24 +1,31 @@
 import { useWebSocket } from '../hooks/useWebSocket';
 import { useQuery } from '@tanstack/react-query';
-import { getHealth } from '../lib/api';
+import { getHealth, getLivePrice } from '../lib/api';
 import { TrendingUp, TrendingDown, Wifi, WifiOff, Database, Activity } from 'lucide-react';
 
 export default function LivePrice() {
   const wsUrl = `${window.location.protocol === 'https:' ? 'wss' : 'ws'}://${window.location.host}/ws/live`;
-  const { price, connected } = useWebSocket(wsUrl);
+  const { price: wsPrice, connected } = useWebSocket(wsUrl);
   const { data: health } = useQuery({
     queryKey: ['health'],
     queryFn: getHealth,
     refetchInterval: 30000,
   });
+  const { data: restPrice } = useQuery({
+    queryKey: ['livePrice'],
+    queryFn: getLivePrice,
+    refetchInterval: 15000,
+    enabled: !wsPrice,
+  });
 
+  const price = wsPrice ?? restPrice ?? null;
   const ltp = price?.ltp ?? 0;
   const change = price?.change ?? 0;
   const changePct = price?.change_pct ?? 0;
   const isUp = change >= 0;
 
   return (
-    <div className="bg-slate-900 border border-slate-700 rounded-xl p-6">
+    <div className="bg-slate-900 rounded-xl p-6 ring-1 ring-white/[0.06] shadow-lg shadow-black/20">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-slate-300">Nifty 50</h2>
         <div className="flex items-center gap-3">

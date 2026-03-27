@@ -49,47 +49,46 @@ class DashboardWebSocketManager:
 
         async def on_live_feed(data: dict):
             if data.get("type") == "live_feed":
-                instrument_key = data.get("instrument_key", "")
-                if instrument_key == NIFTY_KEY:
-                    market_data = data.get("market_data", {})
-                    ltp = float(market_data.get("ltp", 0))
-                    ltt = market_data.get("ltt", "")
-                    volume = int(market_data.get("volume", 0))
-                    oi = int(market_data.get("oi", 0))
-                    cp = float(market_data.get("cp", 0) or 0)
+                ltp = float(data.get("ltp", 0))
+                cp = float(data.get("cp", 0) or 0)
+                ltt_ms = data.get("ltt_ms", 0)
+                change = data.get("change", 0.0)
+                change_pct = data.get("change_pct", 0.0)
 
-                    change = round(ltp - cp, 2) if ltp and cp else 0.0
-                    change_pct = round(change / cp * 100, 2) if cp else 0.0
+                # Convert ms timestamp to ISO string
+                ltt_str = None
+                if ltt_ms:
+                    ltt_str = datetime.fromtimestamp(ltt_ms / 1000, tz=IST).isoformat()
 
-                    msg = {
-                        "type": "price_update",
-                        "symbol": SYMBOL,
-                        "ltp": ltp,
-                        "ltt": ltt,
-                        "volume": volume,
-                        "oi": oi,
-                        "cp": cp,
-                        "change": change,
-                        "change_pct": change_pct,
-                    }
+                msg = {
+                    "type": "price_update",
+                    "symbol": SYMBOL,
+                    "ltp": ltp,
+                    "ltt": ltt_str,
+                    "volume": 0,
+                    "oi": 0,
+                    "cp": cp,
+                    "change": change,
+                    "change_pct": change_pct,
+                }
 
-                    try:
-                        async with get_ts_session() as session:
-                            tick = PriceTick(
-                                timestamp=datetime.now(IST),
-                                symbol=SYMBOL,
-                                ltp=float(ltp),
-                                ltt=datetime.fromisoformat(ltt) if ltt else None,
-                                volume=volume,
-                                oi=oi,
-                                cp=float(cp) if cp else None,
-                            )
-                            session.add(tick)
-                            await session.commit()
-                    except Exception as e:
-                        logger.warning(f"Failed to store price tick: {e}")
+                try:
+                    async with get_ts_session() as session:
+                        tick = PriceTick(
+                            timestamp=datetime.now(IST),
+                            symbol=SYMBOL,
+                            ltp=float(ltp),
+                            ltt=datetime.fromtimestamp(ltt_ms / 1000, tz=IST) if ltt_ms else None,
+                            volume=0,
+                            oi=0,
+                            cp=float(cp) if cp else None,
+                        )
+                        session.add(tick)
+                        await session.commit()
+                except Exception as e:
+                    logger.warning(f"Failed to store price tick: {e}")
 
-                    await self.broadcast(msg)
+                await self.broadcast(msg)
 
         ws_client.register_callback(NIFTY_KEY, on_live_feed)
 

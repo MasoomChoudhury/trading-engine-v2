@@ -72,7 +72,7 @@ export default function MarketStatusBanner() {
   // Market closed (but not a holiday — e.g. weekend)
   if (data.nse_status) {
     return (
-      <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-3 flex items-center gap-2">
+      <div className="bg-slate-800/60 rounded-xl p-3 flex items-center gap-2 ring-1 ring-white/[0.06]">
         <TrendingDown size={16} className="text-slate-400 shrink-0" />
         <p className="text-slate-400 text-xs">
           Market Closed — NSE: {data.nse_status}
@@ -88,7 +88,7 @@ export default function MarketStatusBanner() {
   // Next upcoming holiday
   if (data.next_holiday) {
     return (
-      <div className="bg-slate-800/60 border border-slate-700 rounded-xl p-3 flex items-center gap-2">
+      <div className="bg-slate-800/60 rounded-xl p-3 flex items-center gap-2 ring-1 ring-white/[0.06]">
         <Calendar size={14} className="text-slate-500 shrink-0" />
         <p className="text-slate-500 text-xs">
           Next holiday: <span className="text-slate-400">{data.next_holiday_desc}</span>

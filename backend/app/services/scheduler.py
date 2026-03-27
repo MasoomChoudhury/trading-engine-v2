@@ -4,6 +4,7 @@ Runs every 5 minutes during market hours and every 15 minutes outside.
 """
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
+from apscheduler.triggers.cron import CronTrigger
 from datetime import datetime, timedelta, timezone
 from loguru import logger
 
@@ -43,36 +44,44 @@ async def _do_refresh():
 
     intervals = [("1min", 3), ("5min", 10), ("15min", 30), ("1day", 365)]
 
+    async def _upsert_candles(rows: list, interval: str):
+        if not rows:
+            return
+        async with get_ts_session() as session:
+            for row in rows:
+                ts = pd.to_datetime(row[0], utc=True).to_pydatetime()
+                ins = pg_insert(DBCandle).values(
+                    timestamp=ts, symbol=SYMBOL, interval=interval,
+                    open=float(row[1]), high=float(row[2]),
+                    low=float(row[3]), close=float(row[4]),
+                    volume=int(row[5]) if len(row) > 5 else 0,
+                    oi=int(row[6]) if len(row) > 6 else 0,
+                )
+                ins = ins.on_conflict_do_update(
+                    index_elements=["timestamp", "symbol", "interval"],
+                    set_={"open": ins.excluded.open, "high": ins.excluded.high,
+                          "low": ins.excluded.low, "close": ins.excluded.close,
+                          "volume": ins.excluded.volume, "oi": ins.excluded.oi},
+                )
+                await session.execute(ins)
+            await session.commit()
+
     for interval, days in intervals:
         try:
             to_date = ist_now().strftime("%Y-%m-%d")
             from_date = (ist_now() - timedelta(days=days)).strftime("%Y-%m-%d")
-            raw = await upstox_client.get_historical_candles(NIFTY_KEY, interval, to_date, from_date)
-            if raw:
-                async with get_ts_session() as session:
-                    for row in raw:
-                        ts = pd.to_datetime(row[0], utc=True).to_pydatetime()
-                        ins = pg_insert(DBCandle).values(
-                            timestamp=ts,
-                            symbol=SYMBOL,
-                            interval=interval,
-                            open=float(row[1]),
-                            high=float(row[2]),
-                            low=float(row[3]),
-                            close=float(row[4]),
-                            volume=int(row[5]) if len(row) > 5 else 0,
-                            oi=int(row[6]) if len(row) > 6 else 0,
-                        )
-                        ins = ins.on_conflict_do_update(
-                            index_elements=["timestamp", "symbol", "interval"],
-                            set_={"open": ins.excluded.open, "high": ins.excluded.high,
-                                  "low": ins.excluded.low, "close": ins.excluded.close,
-                                  "volume": ins.excluded.volume, "oi": ins.excluded.oi},
-                        )
-                        await session.execute(ins)
-                    await session.commit()
+            historical = await upstox_client.get_historical_candles(NIFTY_KEY, interval, to_date, from_date)
+            await _upsert_candles(historical, interval)
         except Exception as e:
-            logger.warning(f"Candle fetch failed for {interval}: {e}")
+            logger.warning(f"Historical candle fetch failed for {interval}: {e}")
+
+        # Today's live intraday candles (not available via historical endpoint)
+        if interval != "1day":
+            try:
+                intraday = await upstox_client.get_intraday_candles(NIFTY_KEY, interval)
+                await _upsert_candles(intraday, interval)
+            except Exception as e:
+                logger.warning(f"Intraday candle fetch failed for {interval}: {e}")
 
     # Indicators using calculate_all_indicators
     for interval in ["5min", "1day"]:
@@ -97,7 +106,11 @@ async def _do_refresh():
                         if isinstance(value, dict):
                             for sub_key, sub_val in value.items():
                                 name = f"{interval}_{key}_{sub_key}"
-                                val = float(sub_val) if sub_val is not None else None
+                                # Skip non-numeric values (e.g. supertrend direction string)
+                                try:
+                                    val = float(sub_val) if sub_val is not None else None
+                                except (TypeError, ValueError):
+                                    continue
                                 ins = pg_insert(IndicatorSnapshot).values(
                                     timestamp=now, symbol=SYMBOL,
                                     indicator_name=name, value=val, extra=None,
@@ -109,7 +122,10 @@ async def _do_refresh():
                                 await session.execute(ins)
                         else:
                             name = f"{interval}_{key}"
-                            val = float(value) if value is not None else None
+                            try:
+                                val = float(value) if value is not None else None
+                            except (TypeError, ValueError):
+                                continue
                             ins = pg_insert(IndicatorSnapshot).values(
                                 timestamp=now, symbol=SYMBOL,
                                 indicator_name=name, value=val, extra=None,
@@ -208,6 +224,37 @@ async def _do_refresh():
     logger.info("Scheduled refresh completed")
 
 
+async def _breadth_refresh_job():
+    """Refresh all 50 Nifty constituent candles once a day at market close."""
+    try:
+        from app.services.breadth_service import refresh_all_constituents
+        logger.info("Breadth: starting daily constituent candle refresh")
+        counts = await refresh_all_constituents()
+        logger.info(f"Breadth: refreshed {sum(counts.values())} candles for {len(counts)} symbols")
+    except Exception as e:
+        logger.error(f"Breadth daily refresh failed: {e}")
+
+
+async def _options_eod_job():
+    """Save end-of-day options chain snapshot for near-month expiry."""
+    try:
+        from app.services.options_service import (
+            get_active_expiries, fetch_chain, parse_chain, save_options_eod
+        )
+        expiries = await get_active_expiries()
+        if not expiries:
+            logger.warning("Options EOD: no active expiries found")
+            return
+        expiry = expiries[0]
+        logger.info(f"Options EOD snapshot: saving chain for {expiry}")
+        chain = await fetch_chain(expiry)
+        records = parse_chain(chain)
+        await save_options_eod(expiry, records)
+        logger.info(f"Options EOD snapshot: saved {len(records)} strikes")
+    except Exception as e:
+        logger.error(f"Options EOD snapshot failed: {e}")
+
+
 def start_scheduler():
     """Start the background scheduler."""
     scheduler.add_job(
@@ -217,6 +264,25 @@ def start_scheduler():
         name="Nifty50 Data Refresh",
         replace_existing=True,
         misfire_grace_time=60,
+        next_run_time=__import__('datetime').datetime.now(__import__('datetime').timezone.utc),
+    )
+    # EOD options snapshot: saves options chain daily at 15:40 IST (Mon-Fri)
+    scheduler.add_job(
+        _options_eod_job,
+        CronTrigger(hour=10, minute=10, timezone=IST),  # 15:40 IST = 10:10 UTC
+        id="options_eod",
+        name="Options EOD Snapshot",
+        replace_existing=True,
+        misfire_grace_time=300,
+    )
+    # Constituent breadth refresh: daily at 16:00 IST (10:30 UTC)
+    scheduler.add_job(
+        _breadth_refresh_job,
+        CronTrigger(hour=10, minute=30, timezone=IST),  # 16:00 IST = 10:30 UTC
+        id="breadth_refresh",
+        name="Nifty50 Constituent Breadth Refresh",
+        replace_existing=True,
+        misfire_grace_time=300,
     )
     scheduler.start()
     logger.info("Scheduler started — data refresh every 5 minutes")

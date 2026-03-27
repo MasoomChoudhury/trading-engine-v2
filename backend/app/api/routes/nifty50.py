@@ -7,7 +7,7 @@ from app.schemas.nifty50 import (
     LivePriceResponse,
 )
 from app.services.upstox_client import upstox_client
-from app.services.indicator_calculator import calculate_all_indicators
+from app.services.indicator_calculator import calculate_all_indicators, calculate_indicator_series
 from app.services.gex_calculator import calculate_gex
 from app.services.derived_metrics import calculate_derived_metrics
 from app.db.database import get_ts_session
@@ -45,42 +45,56 @@ def _candles_to_raw(candles: list) -> list[list]:
     ]
 
 
+async def _store_candles(rows: list, interval: str):
+    """Upsert a list of raw candle rows into TimescaleDB."""
+    if not rows:
+        return
+    async with get_ts_session() as session:
+        for row in rows:
+            ts = pd.to_datetime(row[0], utc=True).to_pydatetime()
+            stmt = insert(DBCandle).values(
+                timestamp=ts,
+                symbol=SYMBOL,
+                interval=interval,
+                open=float(row[1]),
+                high=float(row[2]),
+                low=float(row[3]),
+                close=float(row[4]),
+                volume=int(row[5]) if len(row) > 5 else 0,
+                oi=int(row[6]) if len(row) > 6 else 0,
+            )
+            stmt = stmt.on_conflict_do_update(
+                index_elements=["timestamp", "symbol", "interval"],
+                set_={
+                    "open": stmt.excluded.open,
+                    "high": stmt.excluded.high,
+                    "low": stmt.excluded.low,
+                    "close": stmt.excluded.close,
+                    "volume": stmt.excluded.volume,
+                    "oi": stmt.excluded.oi,
+                },
+            )
+            await session.execute(stmt)
+        await session.commit()
+
+
 async def _fetch_candles(interval: str, days_back: int = 5) -> list:
-    """Fetch candles from Upstox and store in TimescaleDB."""
+    """Fetch historical + today's intraday candles from Upstox and store in TimescaleDB."""
     to_date = ist_now().strftime("%Y-%m-%d")
     from_date = (ist_now() - timedelta(days=days_back)).strftime("%Y-%m-%d")
-    raw = await upstox_client.get_historical_candles(NIFTY_KEY, interval, to_date, from_date)
 
-    if raw:
-        async with get_ts_session() as session:
-            for row in raw:
-                ts = pd.to_datetime(row[0], utc=True).to_pydatetime()
-                stmt = insert(DBCandle).values(
-                    timestamp=ts,
-                    symbol=SYMBOL,
-                    interval=interval,
-                    open=float(row[1]),
-                    high=float(row[2]),
-                    low=float(row[3]),
-                    close=float(row[4]),
-                    volume=int(row[5]) if len(row) > 5 else 0,
-                    oi=int(row[6]) if len(row) > 6 else 0,
-                )
-                stmt = stmt.on_conflict_do_update(
-                    index_elements=["timestamp", "symbol", "interval"],
-                    set_={
-                        "open": stmt.excluded.open,
-                        "high": stmt.excluded.high,
-                        "low": stmt.excluded.low,
-                        "close": stmt.excluded.close,
-                        "volume": stmt.excluded.volume,
-                        "oi": stmt.excluded.oi,
-                    },
-                )
-                await session.execute(stmt)
-            await session.commit()
+    # Historical completed sessions
+    historical = await upstox_client.get_historical_candles(NIFTY_KEY, interval, to_date, from_date)
+    await _store_candles(historical, interval)
 
-    return raw
+    # Today's intraday candles (live session — not in historical endpoint)
+    try:
+        intraday = await upstox_client.get_intraday_candles(NIFTY_KEY, interval)
+        await _store_candles(intraday, interval)
+    except Exception as e:
+        logger.warning(f"Intraday candle fetch failed for {interval}: {e}")
+
+    return historical
 
 
 async def _get_candles_from_db(interval: str, limit: int = 300) -> list:
@@ -358,6 +372,22 @@ async def get_candles(
         )
         for row in candles[-limit:]
     ]
+
+
+@router.get("/indicator-series")
+async def get_indicator_series(
+    interval: str = Query(default="5min", pattern="^(1min|5min|15min|1hour|1day)$"),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    """Get per-candle indicator values for the time-series table."""
+    fetch_limit = max(limit + 300, 400)
+    candles = await _get_candles_from_db(interval, limit=fetch_limit)
+    if len(candles) < 50:
+        candles = await _fetch_candles(interval, days_back=30)
+        candles = await _get_candles_from_db(interval, limit=fetch_limit)
+
+    series = calculate_indicator_series(candles)
+    return series[-limit:]
 
 
 @router.get("/price")

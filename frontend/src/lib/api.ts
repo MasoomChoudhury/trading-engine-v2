@@ -158,3 +158,222 @@ export interface RefreshResult {
 }
 export const triggerRefresh = () =>
   fetcher<RefreshResult>('/v1/admin/refresh', { method: 'POST' });
+
+// ─── Indicator Series ───────────────────────────────────────────────────────
+export interface IndicatorRow {
+  timestamp: string;
+  open: number | null;
+  high: number | null;
+  low: number | null;
+  close: number | null;
+  volume: number;
+  rsi_14: number | null;
+  ema_20: number | null;
+  ema_21: number | null;
+  ema_50: number | null;
+  sma_200: number | null;
+  macd_line: number | null;
+  macd_signal: number | null;
+  macd_hist: number | null;
+  bb_upper: number | null;
+  bb_middle: number | null;
+  bb_lower: number | null;
+  bb_bandwidth: number | null;
+  supertrend: number | null;
+  supertrend_dir: string | null;
+  stoch_k: number | null;
+  stoch_d: number | null;
+  adx: number | null;
+  plus_di: number | null;
+  minus_di: number | null;
+  atr_14: number | null;
+  vwap: number | null;
+}
+export const getIndicatorSeries = (interval = '5min', limit = 100) =>
+  fetcher<IndicatorRow[]>(`/v1/nifty50/indicator-series?interval=${interval}&limit=${limit}`);
+
+// ─── Auth Token Request ─────────────────────────────────────────────────────
+export interface TokenRequestResult {
+  message: string;
+  authorization_expiry?: string;
+  notifier_url?: string;
+}
+export const requestToken = () =>
+  fetcher<TokenRequestResult>('/v1/auth/request-token', { method: 'POST' });
+
+// ─── Futures Volume ─────────────────────────────────────────────────────────
+export interface FuturesChartRow {
+  date: string;
+  near_volume: number;
+  far_volume: number;
+  combined_volume: number;
+  rollover_pct: number;
+  near_oi: number;
+  far_oi: number;
+  near_close: number | null;
+  far_close: number | null;
+  is_expiry_week: boolean;
+  volume_zscore: number | null;
+}
+
+export interface FuturesSummary {
+  avg_daily_volume: number;
+  volume_spike_count: number;
+  current_rollover_pct: number;
+  avg_rollover_pct_10d: number;
+  current_near_oi: number;
+  total_days: number;
+}
+
+export interface FuturesVolumeData {
+  chart_data: FuturesChartRow[];
+  near_expiry: string;
+  far_expiry: string;
+  near_lot_size: number;
+  summary: FuturesSummary;
+}
+
+export const getFuturesVolume = () =>
+  fetcher<FuturesVolumeData>('/v1/futures/volume');
+
+// ─── Options OI & Sentiment ──────────────────────────────────────────────────
+export interface OptionsCurrent {
+  expiry: string;
+  near_expiry: string;
+  next_expiry: string | null;
+  active_expiry: string;
+  use_next_expiry: boolean;
+  spot_price: number;
+  atm_strike: number;
+  days_to_expiry: number;
+  is_expiry_week: boolean;
+  pcr_oi: number;
+  pcr_vol: number;
+  pcr_oi_prev: number | null;
+  straddle_premium: number;
+  atm_ce_vol: number;
+  atm_pe_vol: number;
+  oi_wall_strike: number;
+  max_pain: number;
+}
+
+export interface PcrHistoryRow {
+  date: string;
+  pcr_oi: number;
+  pcr_vol: number;
+  pcr_oi_ema10: number | null;
+  atm_strike: number;
+  ce_straddle_vol: number;
+  pe_straddle_vol: number;
+  total_straddle_vol: number;
+  straddle_ma20: number | null;
+  spot_price: number;
+  is_expiry_week: boolean;
+}
+
+export interface OiWallRow {
+  strike: number;
+  ce_oi: number;
+  pe_oi: number;
+  total_oi: number;
+}
+
+export interface OiChangeRow {
+  strike: number;
+  ce_change: number;
+  pe_change: number;
+}
+
+export interface OiHeatmap {
+  dates: string[];
+  strikes: number[];
+  rows: { strike: number; ce_changes: number[]; pe_changes: number[] }[];
+}
+
+export interface OptionsAnalytics {
+  current: OptionsCurrent;
+  pcr_history: PcrHistoryRow[];
+  oi_wall: OiWallRow[];
+  oi_change_today: OiChangeRow[];
+  oi_heatmap: OiHeatmap;
+}
+
+export const getOptionsAnalytics = (expiry?: string) =>
+  fetcher<OptionsAnalytics>(
+    `/v1/options/analytics${expiry ? `?expiry=${expiry}` : ''}`
+  );
+
+// ─── Breadth / Constituent Analysis ─────────────────────────────────────────
+export interface BreadthSummary {
+  breadth_pct: number;
+  hw_share_pct: number;
+  conviction: 'Broad' | 'Narrow' | 'Heavyweight-driven';
+  top_sector: string;
+  top_sector_pct: number;
+  high_vol_count: number;
+  nifty_chg_pct: number;
+}
+
+export interface BreadthAlert { type: 'warning' | 'info'; msg: string; }
+
+export interface VolumeSeriesRow {
+  date: string;
+  weighted_vol: number;
+  vol_ma20: number | null;
+  nifty_close: number;
+  nifty_chg_pct: number;
+  futures_vol: number;
+  divergence: string | null;
+}
+
+export interface BreadthSeriesRow {
+  date: string;
+  breadth_pct: number;
+  hw_share_pct: number;
+  annotation: string | null;
+}
+
+export interface SectorSeriesRow {
+  date: string;
+  [sector: string]: number | string;
+}
+
+export interface HeatmapRow {
+  symbol: string;
+  name: string;
+  sector: string;
+  weight: number;
+  is_hw: boolean;
+  zscores: number[];
+}
+
+export interface HeavyweightRow {
+  symbol: string;
+  name: string;
+  volume: number;
+  ma20: number;
+  pct_vs_ma: number;
+  weight: number;
+  above_ma: boolean;
+}
+
+export interface BreadthAnalytics {
+  status?: string;
+  symbols_ready?: number;
+  total?: number;
+  message?: string;
+  config?: { last_updated: string; weights_age_days?: number; n_constituents: number };
+  summary: BreadthSummary;
+  alerts: BreadthAlert[];
+  volume_series: VolumeSeriesRow[];
+  breadth_series: BreadthSeriesRow[];
+  sector_series: SectorSeriesRow[];
+  heatmap: { dates: string[]; rows: HeatmapRow[] };
+  heavyweight_today: HeavyweightRow[];
+}
+
+export const getBreadthAnalytics = () =>
+  fetcher<BreadthAnalytics>('/v1/breadth/analytics');
+
+export const triggerBreadthRefresh = () =>
+  fetcher<{ status: string; message: string }>('/v1/breadth/refresh', { method: 'POST' });

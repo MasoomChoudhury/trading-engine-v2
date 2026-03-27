@@ -24,13 +24,13 @@ export default function IndicatorCard({
     interpretation === 'bearish' ? <TrendingDown size={14} className="text-red-400" /> :
     <Minus size={14} className="text-slate-500" />;
 
-  const borderColor =
-    interpretation === 'bullish' ? 'border-emerald-900' :
-    interpretation === 'bearish' ? 'border-red-900' :
-    'border-slate-700';
+  const shadowColor =
+    interpretation === 'bullish' ? 'shadow-emerald-900/20' :
+    interpretation === 'bearish' ? 'shadow-red-900/20' :
+    'shadow-black/30';
 
   return (
-    <div className={`bg-slate-900 border ${borderColor} rounded-lg p-4 ${className}`}>
+    <div className={`stat-card shadow-sm ${shadowColor} ${className}`}>
       <div className="flex items-center justify-between mb-1">
         <span className="text-xs font-medium text-slate-400 uppercase tracking-wide">{name}</span>
         {icon}

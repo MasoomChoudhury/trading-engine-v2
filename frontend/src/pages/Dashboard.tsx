@@ -30,7 +30,7 @@ function BollingerDisplay({ ind }: { ind: Record<string, any> }) {
   const lower = typeof ind.bb_upper === 'object' ? (ind.bb_upper as any).lower : ind.bb_lower;
 
   return (
-    <div className="bg-slate-800 rounded-lg p-4">
+    <div className="stat-card">
       <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">Bollinger Bands (20,2)</p>
       <div className="space-y-1 text-xs">
         <div className="flex justify-between">
@@ -55,7 +55,7 @@ function StochDisplay({ ind }: { ind: Record<string, any> }) {
   const d = typeof ind.stoch_rsi_k === 'object' ? (ind.stoch_rsi_k as any).d : ind.stoch_rsi_d;
 
   return (
-    <div className="bg-slate-800 rounded-lg p-4">
+    <div className="stat-card">
       <p className="text-xs font-medium text-slate-400 uppercase tracking-wide mb-2">Stochastic RSI (14,3,3)</p>
       <div className="space-y-1 text-xs">
         <div className="flex justify-between">
@@ -75,13 +75,13 @@ export default function Dashboard() {
   const { data: ind, isLoading } = useIndicators('5min');
 
   return (
-    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+    <div className="p-6 space-y-6 max-w-7xl mx-auto page-enter">
       <LivePrice />
       <MarketStatusBanner />
       <GEXPanel />
 
-      <div className="bg-slate-900 border border-slate-700 rounded-xl p-6">
-        <h2 className="text-lg font-semibold text-slate-200 mb-4">Technical Indicators</h2>
+      <div className="bg-slate-900 rounded-xl p-6 ring-1 ring-white/[0.06] shadow-lg shadow-black/20">
+        <h2 className="text-lg font-semibold text-slate-200 mb-4 tracking-tight">Technical Indicators</h2>
 
         {isLoading ? (
           <div className="flex items-center justify-center py-12">

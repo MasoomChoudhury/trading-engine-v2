@@ -49,7 +49,7 @@ export default function APILogTable() {
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2 bg-slate-800 rounded-lg px-3 py-2">
+        <div className="flex items-center gap-2 bg-slate-800/80 rounded-lg px-3 py-2 ring-1 ring-white/[0.06]">
           <Search size={14} className="text-slate-400" />
           <input
             type="text"
@@ -63,7 +63,7 @@ export default function APILogTable() {
         <select
           value={method}
           onChange={(e) => { setMethod(e.target.value); setPage(1); }}
-          className="bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 outline-none border border-slate-700"
+          className="bg-slate-800/80 text-slate-200 text-sm rounded-lg px-3 py-2 outline-none ring-1 ring-white/[0.06]"
         >
           <option value="">All Methods</option>
           <option value="GET">GET</option>
@@ -73,7 +73,7 @@ export default function APILogTable() {
         <select
           value={hours}
           onChange={(e) => { setHours(Number(e.target.value)); setPage(1); }}
-          className="bg-slate-800 text-slate-200 text-sm rounded-lg px-3 py-2 outline-none border border-slate-700"
+          className="bg-slate-800/80 text-slate-200 text-sm rounded-lg px-3 py-2 outline-none ring-1 ring-white/[0.06]"
         >
           <option value={1}>Last 1 hour</option>
           <option value={6}>Last 6 hours</option>
@@ -83,7 +83,7 @@ export default function APILogTable() {
 
         <button
           onClick={() => refetch()}
-          className="flex items-center gap-2 px-3 py-2 bg-slate-800 hover:bg-slate-700 rounded-lg text-sm text-slate-300 transition-colors"
+          className="btn-ghost"
         >
           <RefreshCw size={14} className={isFetching ? 'animate-spin' : ''} />
           Refresh
@@ -96,7 +96,7 @@ export default function APILogTable() {
         )}
       </div>
 
-      <div className="bg-slate-900 border border-slate-700 rounded-xl overflow-hidden">
+      <div className="bg-slate-900 rounded-xl overflow-hidden ring-1 ring-white/[0.06] shadow-lg shadow-black/20">
         <div className="overflow-x-auto">
           <table className="w-full text-sm">
             <thead>

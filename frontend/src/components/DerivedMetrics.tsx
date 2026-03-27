@@ -19,11 +19,11 @@ export default function DerivedMetrics() {
 
   if (isLoading || !data) {
     return (
-      <div className="bg-slate-900 border border-slate-700 rounded-xl p-6">
+      <div className="bg-slate-900 rounded-xl p-6 ring-1 ring-white/[0.06] shadow-lg shadow-black/20">
         <h2 className="text-lg font-semibold text-slate-200 mb-4">Derived Metrics</h2>
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           {[...Array(8)].map((_, i) => (
-            <div key={i} className="animate-pulse bg-slate-800 rounded-lg p-4 h-24" />
+            <div key={i} className="animate-pulse bg-slate-800/80 rounded-lg p-4 h-24 ring-1 ring-white/[0.05]" />
           ))}
         </div>
       </div>
@@ -80,7 +80,7 @@ export default function DerivedMetrics() {
   ];
 
   return (
-    <div className="bg-slate-900 border border-slate-700 rounded-xl p-6">
+    <div className="bg-slate-900 rounded-xl p-6 ring-1 ring-white/[0.06] shadow-lg shadow-black/20">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-slate-200">Derived Metrics</h2>
         <span className="text-xs text-slate-500">

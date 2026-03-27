@@ -258,21 +258,43 @@ class UpstoxClient:
     ) -> list[list[Any]]:
         """Fetch historical OHLC candles from V2 endpoint (public).
         Note: V3 historical-candle does NOT support index instruments (Nifty 50).
-        We use V2 which supports indices but uses a simpler format: /v2/historical-candle/{key}/{interval}/{to_date}
+        V2 URL format: /v2/historical-candle/{key}/{interval}/{to_date}/{from_date}
         """
-        # V2 only accepts: 1minute, 30minute, day, week, month for indices
         interval_map = {
             "1min": "1minute",
-            "5min": "1minute",   # fetch 1min and aggregate in calculator
+            "5min": "1minute",
             "15min": "1minute",
             "1hour": "1minute",
             "1day": "day",
         }
         v2_interval = interval_map.get(interval, interval)
+        # V2 index endpoint only supports /{to_date} — from_date is ignored by the API
         path = f"/v2/historical-candle/{instrument_key}/{v2_interval}/{to_date}"
         data = await self._request("GET", path, authenticated=False, params={})
         candles = data.get("candles", [])
-        logger.debug(f"Fetched {len(candles)} candles for {instrument_key} ({interval})")
+        logger.debug(f"Fetched {len(candles)} historical candles for {instrument_key} ({interval})")
+        return candles
+
+    async def get_intraday_candles(
+        self,
+        instrument_key: str,
+        interval: str,
+    ) -> list[list[Any]]:
+        """Fetch today's intraday candles from V2 intraday endpoint (authenticated).
+        Required for live session data — the historical endpoint only covers completed sessions.
+        """
+        interval_map = {
+            "1min": "1minute",
+            "5min": "1minute",
+            "15min": "1minute",
+            "1hour": "1minute",
+            "1day": "day",
+        }
+        v2_interval = interval_map.get(interval, interval)
+        path = f"/v2/historical-candle/intraday/{instrument_key}/{v2_interval}"
+        data = await self._request("GET", path, authenticated=True, params={})
+        candles = data.get("candles", [])
+        logger.debug(f"Fetched {len(candles)} intraday candles for {instrument_key} ({interval})")
         return candles
 
     # ─── Option Chain (Authenticated) ────────────────────────────────────────
@@ -416,8 +438,8 @@ class UpstoxClient:
 
     async def get_websocket_url(self) -> str:
         """Get authorized WebSocket URL for market data feed."""
-        data = await self._request("GET", "/v3/market-data-feed/authorize", authenticated=True)
-        return data.get("authorized_redirect_uri", "")
+        data = await self._request("GET", "/v3/feed/market-data-feed/authorize", authenticated=True)
+        return data.get("authorized_redirect_uri", "") or data.get("authorizedRedirectUri", "")
 
 
 # Global client instance

@@ -15,6 +15,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY app/ ./app/
 COPY scripts/ ./scripts/
 
+# Compile protobuf definitions
+RUN python -m grpc_tools.protoc \
+    -I./app/services \
+    --python_out=./app/services \
+    ./app/services/MarketDataFeed.proto
+
 # Expose port
 EXPOSE 8000
 

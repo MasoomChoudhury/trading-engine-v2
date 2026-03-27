@@ -48,18 +48,18 @@ async def get_api_logs(
             .limit(page_size)
         )
         result = await session.execute(stmt)
-        rows = result.all()
+        rows = result.scalars().all()
 
         entries = [
             ApiLogEntry(
-                id=row[0],
-                timestamp=row[1].isoformat() if row[1] else "",
-                endpoint=row[2],
-                method=row[3],
-                request_params=row[4],
-                response_status=row[6],
-                duration_ms=row[8],
-                error=row[9],
+                id=row.id,
+                timestamp=row.timestamp.isoformat() if row.timestamp else "",
+                endpoint=row.endpoint,
+                method=row.method,
+                request_params=row.request_params,
+                response_status=row.response_status,
+                duration_ms=row.duration_ms,
+                error=row.error,
             )
             for row in rows
         ]
@@ -85,13 +85,13 @@ async def get_market_status(
             .limit(100)
         )
         result = await session.execute(stmt)
-        rows = result.all()
+        rows = result.scalars().all()
 
         return [
             MarketStatusResponse(
-                status=row[3],
-                segment=row[4],
-                timestamp=row[2].isoformat() if row[2] else "",
+                status=row.status,
+                segment=getattr(row, 'segment', ''),
+                timestamp=row.timestamp.isoformat() if row.timestamp else "",
             )
             for row in rows
         ]

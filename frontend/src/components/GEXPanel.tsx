@@ -18,7 +18,7 @@ export default function GEXPanel() {
 
   if (isLoading) {
     return (
-      <div className="bg-slate-900 border border-slate-700 rounded-xl p-6">
+      <div className="bg-slate-900 rounded-xl p-6 ring-1 ring-white/[0.06] shadow-lg shadow-black/20">
         <div className="animate-pulse space-y-3">
           <div className="h-6 bg-slate-700 rounded w-1/3" />
           <div className="h-4 bg-slate-700 rounded w-2/3" />
@@ -30,7 +30,7 @@ export default function GEXPanel() {
 
   if (error || !gex) {
     return (
-      <div className="bg-slate-900 border border-red-900 rounded-xl p-6">
+      <div className="bg-slate-900 rounded-xl p-6 ring-1 ring-red-900/50 shadow-lg shadow-black/20">
         <div className="flex items-center gap-2 text-red-400 mb-2">
           <AlertTriangle size={18} />
           <span className="font-semibold">GEX Data Unavailable</span>
@@ -47,7 +47,7 @@ export default function GEXPanel() {
   };
 
   return (
-    <div className="bg-slate-900 border border-slate-700 rounded-xl p-6">
+    <div className="bg-slate-900 rounded-xl p-6 ring-1 ring-white/[0.06] shadow-lg shadow-black/20">
       <div className="flex items-center justify-between mb-4">
         <h2 className="text-lg font-semibold text-slate-200">Gamma Exposure (GEX)</h2>
         <span className="text-xs text-slate-500">Expiry: {gex.expiry_date}</span>
@@ -64,25 +64,25 @@ export default function GEXPanel() {
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
-        <div className="bg-slate-800 rounded-lg p-3">
+        <div className="stat-card !p-3">
           <p className="text-xs text-slate-400 mb-1">Total GEX</p>
           <p className={`text-xl font-bold tabular-nums ${gammaColor(gex.total_gex)}`}>
             {(gex.total_gex / 1e9).toFixed(2)}B
           </p>
         </div>
-        <div className="bg-slate-800 rounded-lg p-3">
+        <div className="stat-card !p-3">
           <p className="text-xs text-slate-400 mb-1">Net GEX</p>
           <p className={`text-xl font-bold tabular-nums ${gammaColor(gex.net_gex)}`}>
             {(gex.net_gex / 1e9).toFixed(2)}B
           </p>
         </div>
-        <div className="bg-slate-800 rounded-lg p-3">
+        <div className="stat-card !p-3">
           <p className="text-xs text-slate-400 mb-1">Zero Gamma</p>
           <p className="text-xl font-bold tabular-nums text-yellow-400">
             {gex.zero_gamma_level.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
           </p>
         </div>
-        <div className="bg-slate-800 rounded-lg p-3">
+        <div className="stat-card !p-3">
           <p className="text-xs text-slate-400 mb-1">PCR</p>
           <p className={`text-xl font-bold tabular-nums ${gex.pcr > 1 ? 'text-red-400' : 'text-emerald-400'}`}>
             {gex.pcr.toFixed(3)}
@@ -91,7 +91,7 @@ export default function GEXPanel() {
       </div>
 
       <div className="grid grid-cols-2 gap-3">
-        <div className="bg-slate-800 rounded-lg p-3">
+        <div className="stat-card !p-3">
           <p className="text-xs text-emerald-400 mb-1">Call Wall (Max Call Gamma)</p>
           <p className="text-lg font-bold tabular-nums text-emerald-300">
             {gex.call_wall.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
@@ -100,7 +100,7 @@ export default function GEXPanel() {
             {gex.call_wall_distance >= 0 ? '+' : ''}{gex.call_wall_distance.toFixed(2)}% from spot
           </p>
         </div>
-        <div className="bg-slate-800 rounded-lg p-3">
+        <div className="stat-card !p-3">
           <p className="text-xs text-red-400 mb-1">Put Wall (Max Put Gamma)</p>
           <p className="text-lg font-bold tabular-nums text-red-300">
             {gex.put_wall.toLocaleString('en-IN', { maximumFractionDigits: 0 })}
@@ -111,7 +111,7 @@ export default function GEXPanel() {
         </div>
       </div>
 
-      <div className="mt-4 bg-slate-800 rounded-lg p-3">
+      <div className="mt-4 stat-card !p-3">
         <p className="text-xs text-slate-400 mb-1">Price vs Zero Gamma Level</p>
         <div className="flex items-center gap-3">
           <span className="text-lg font-bold text-white">{gex.spot_price.toLocaleString('en-IN', { maximumFractionDigits: 2 })}</span>

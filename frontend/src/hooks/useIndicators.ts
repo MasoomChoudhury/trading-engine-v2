@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { getIndicators, getDerivedMetrics, getGEX, getCandles } from '../lib/api';
+import { getIndicators, getDerivedMetrics, getGEX, getCandles, getIndicatorSeries } from '../lib/api';
 
 export function useIndicators(interval = '5min') {
   return useQuery({
@@ -33,6 +33,16 @@ export function useCandles(interval = '5min', limit = 200) {
     queryKey: ['candles', interval, limit],
     queryFn: () => getCandles(interval, limit),
     refetchInterval: 60000,
+    retry: 2,
+  });
+}
+
+export function useIndicatorSeries(interval = '5min', limit = 100) {
+  return useQuery({
+    queryKey: ['indicator-series', interval, limit],
+    queryFn: () => getIndicatorSeries(interval, limit),
+    refetchInterval: 30000,
+    refetchIntervalInBackground: true,
     retry: 2,
   });
 }

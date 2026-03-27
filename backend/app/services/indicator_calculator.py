@@ -5,6 +5,7 @@ No TA-Lib dependency.
 """
 
 from __future__ import annotations
+import math
 import numpy as np
 import pandas as pd
 from typing import TypedDict, Optional
@@ -330,3 +331,128 @@ def calculate_all_indicators(candle_data: list[list]) -> AllIndicators:
         atr=calculate_atr(high, low, close),
         vwap=calculate_vwap(high, low, close, volume),
     )
+
+
+def calculate_indicator_series(candle_data: list[list]) -> list[dict]:
+    """Compute per-candle indicator values across the full series."""
+    if not candle_data or len(candle_data) < 2:
+        return []
+
+    df = parse_candles(candle_data)
+    close = df["close"]
+    high = df["high"]
+    low = df["low"]
+    volume = df["volume"]
+    n = len(df)
+
+    def sf(val, d=2):
+        """Safe float: round and return None for NaN/Inf."""
+        try:
+            f = float(val)
+            return None if (math.isnan(f) or math.isinf(f)) else round(f, d)
+        except (TypeError, ValueError):
+            return None
+
+    # ── RSI 14 ─────────────────────────────────────────────────────────────────
+    delta = close.diff()
+    gain = delta.where(delta > 0, 0.0)
+    loss = (-delta).where(delta < 0, 0.0)
+    rsi_s = 100 - (100 / (1 + gain.rolling(14).mean() / loss.rolling(14).mean()))
+
+    # ── EMAs & SMA ──────────────────────────────────────────────────────────────
+    ema20_s = ema(close, 20)
+    ema21_s = ema(close, 21)
+    ema50_s = ema(close, 50)
+    sma200_s = sma(close, 200)
+
+    # ── MACD (12, 26, 9) ───────────────────────────────────────────────────────
+    macd_line_s = ema(close, 12) - ema(close, 26)
+    macd_sig_s = ema(macd_line_s, 9)
+    macd_hist_s = macd_line_s - macd_sig_s
+
+    # ── Bollinger Bands (20, 2) ─────────────────────────────────────────────────
+    bb_mid_s = sma(close, 20)
+    bb_std_s = close.rolling(20).std()
+    bb_up_s = bb_mid_s + 2.0 * bb_std_s
+    bb_lo_s = bb_mid_s - 2.0 * bb_std_s
+    bb_bw_s = (bb_up_s - bb_lo_s) / bb_mid_s
+
+    # ── Supertrend (7, 3) ───────────────────────────────────────────────────────
+    tr = calculate_true_range(high, low, close)
+    atr_st = tr.rolling(7).mean()
+    hl2 = (high + low) / 2
+    st_up = hl2 + 3.0 * atr_st
+    st_lo = hl2 - 3.0 * atr_st
+    st_vals = [float(close.iloc[0])]
+    st_dirs = [1]
+    for i in range(1, n):
+        curr = close.iloc[i]
+        if curr > st_up.iloc[i]:
+            st_dirs.append(1)
+        elif curr < st_lo.iloc[i]:
+            st_dirs.append(-1)
+        else:
+            st_dirs.append(st_dirs[-1])
+        st_vals.append(st_lo.iloc[i] if st_dirs[-1] == 1 else st_up.iloc[i])
+    st_val_s = pd.Series(st_vals, index=df.index)
+    st_dir_s = pd.Series(["bullish" if d == 1 else "bearish" for d in st_dirs], index=df.index)
+
+    # ── Stochastic RSI (14, 14, 3, 3) ──────────────────────────────────────────
+    stoch_rsi_raw = 100 - (100 / (1 + gain.rolling(14).mean() / loss.rolling(14).mean()))
+    stoch_min = stoch_rsi_raw.rolling(14).min()
+    stoch_max = stoch_rsi_raw.rolling(14).max()
+    stoch_pct = 100 * (stoch_rsi_raw - stoch_min) / (stoch_max - stoch_min)
+    stoch_k_s = stoch_pct.rolling(3).mean()
+    stoch_d_s = stoch_k_s.rolling(3).mean()
+
+    # ── ADX (+DI, -DI, ADX 14) ─────────────────────────────────────────────────
+    atr14_s = tr.rolling(14).mean()
+    pdm = high.diff().where((high.diff() > -low.diff()) & (high.diff() > 0), 0.0)
+    ndm = (-low.diff()).where((-low.diff() > high.diff()) & (-low.diff() > 0), 0.0)
+    plus_di_s = 100 * (pdm.rolling(14).mean() / atr14_s)
+    minus_di_s = 100 * (ndm.rolling(14).mean() / atr14_s)
+    dx_s = 100 * abs(plus_di_s - minus_di_s) / (plus_di_s + minus_di_s)
+    adx_s = dx_s.rolling(14).mean()
+
+    # ── ATR 14 ─────────────────────────────────────────────────────────────────
+    atr_s = atr14_s
+
+    # ── VWAP (cumulative intraday) ──────────────────────────────────────────────
+    tp = (high + low + close) / 3
+    cum_vol = volume.cumsum()
+    vwap_s = (tp * volume).cumsum() / cum_vol
+
+    # ── Assemble rows ───────────────────────────────────────────────────────────
+    result = []
+    for i in range(n):
+        vol_val = df["volume"].iloc[i]
+        result.append({
+            "timestamp": df["timestamp"].iloc[i].isoformat(),
+            "open":  sf(df["open"].iloc[i]),
+            "high":  sf(df["high"].iloc[i]),
+            "low":   sf(df["low"].iloc[i]),
+            "close": sf(df["close"].iloc[i]),
+            "volume": int(vol_val) if not math.isnan(float(vol_val)) else 0,
+            "rsi_14":        sf(rsi_s.iloc[i]),
+            "ema_20":        sf(ema20_s.iloc[i]),
+            "ema_21":        sf(ema21_s.iloc[i]),
+            "ema_50":        sf(ema50_s.iloc[i]),
+            "sma_200":       sf(sma200_s.iloc[i]),
+            "macd_line":     sf(macd_line_s.iloc[i], 4),
+            "macd_signal":   sf(macd_sig_s.iloc[i], 4),
+            "macd_hist":     sf(macd_hist_s.iloc[i], 4),
+            "bb_upper":      sf(bb_up_s.iloc[i]),
+            "bb_middle":     sf(bb_mid_s.iloc[i]),
+            "bb_lower":      sf(bb_lo_s.iloc[i]),
+            "bb_bandwidth":  sf(bb_bw_s.iloc[i], 4),
+            "supertrend":    sf(st_val_s.iloc[i]),
+            "supertrend_dir": st_dir_s.iloc[i],
+            "stoch_k":       sf(stoch_k_s.iloc[i]),
+            "stoch_d":       sf(stoch_d_s.iloc[i]),
+            "adx":           sf(adx_s.iloc[i]),
+            "plus_di":       sf(plus_di_s.iloc[i]),
+            "minus_di":      sf(minus_di_s.iloc[i]),
+            "atr_14":        sf(atr_s.iloc[i]),
+            "vwap":          sf(vwap_s.iloc[i]),
+        })
+    return result
