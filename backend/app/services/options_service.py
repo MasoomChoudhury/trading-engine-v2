@@ -534,3 +534,235 @@ async def build_options_analytics(target_expiry: Optional[str] = None) -> dict:
         "oi_change_today": current.pop("oi_change_today", []),
         "oi_heatmap": heatmap,
     }
+
+
+async def build_iv_skew(target_expiry: str | None = None) -> dict:
+    """
+    Build IV skew analytics from the option chain's option_greeks.
+
+    Returns:
+      - smile: [{strike, call_iv, put_iv, call_delta, put_delta}] sorted by strike
+      - atm_iv: IV at ATM strike (average of call/put)
+      - rr25: 25-delta risk reversal = 25d_put_iv - 25d_call_iv
+        (positive = put vol > call vol = downside fear)
+      - fly25: 25-delta butterfly = (25d_put_iv + 25d_call_iv)/2 - atm_iv
+      - rr10: 10-delta risk reversal
+      - skew_direction: 'put_skew' | 'call_skew' | 'neutral'
+      - spot_price, expiry_date, timestamp
+    """
+    from app.services.upstox_client import upstox_client
+
+    expiries = await get_active_expiries()
+    if not expiries:
+        raise ValueError("No active expiries")
+
+    near = expiries[0]
+    next_e = expiries[1] if len(expiries) > 1 else None
+    dte = days_to_expiry(near)
+    use_next = dte <= 3 and next_e is not None
+    expiry = target_expiry or (next_e if use_next else near)
+
+    raw_chain = await fetch_chain(expiry)
+
+    smile = []
+    spot = 0.0
+    for item in raw_chain:
+        strike = float(item.get("strike_price", 0) or 0)
+        if not strike:
+            continue
+        if not spot:
+            spot = float(item.get("underlying_spot_price") or 0)
+
+        ce = item.get("call_options") or {}
+        pe = item.get("put_options") or {}
+        ce_g = ce.get("option_greeks") or {}
+        pe_g = pe.get("option_greeks") or {}
+
+        call_iv  = float(ce_g.get("iv") or 0)
+        put_iv   = float(pe_g.get("iv") or 0)
+        call_d   = float(ce_g.get("delta") or 0)
+        put_d    = float(pe_g.get("delta") or 0)
+
+        # Only include strikes with valid IV
+        if call_iv <= 0 and put_iv <= 0:
+            continue
+
+        # Upstox option_greeks.iv is already in percentage form (e.g. 26.41 = 26.41%)
+        smile.append({
+            "strike": strike,
+            "call_iv": round(call_iv, 2) if call_iv > 0 else None,
+            "put_iv":  round(put_iv,  2) if put_iv  > 0 else None,
+            "call_delta": round(call_d, 3),
+            "put_delta":  round(put_d,  3),
+        })
+
+    smile.sort(key=lambda x: x["strike"])
+
+    # ATM IV
+    atm = atm_strike(spot)
+    atm_rows = [s for s in smile if s["strike"] == atm]
+    atm_iv = None
+    if atm_rows:
+        r = atm_rows[0]
+        vals = [v for v in [r["call_iv"], r["put_iv"]] if v]
+        atm_iv = round(sum(vals) / len(vals), 2) if vals else None
+
+    def _find_delta_iv(target_delta: float, side: str) -> float | None:
+        """Find IV of the strike closest to target_delta."""
+        key = "call_delta" if side == "call" else "put_delta"
+        iv_key = "call_iv" if side == "call" else "put_iv"
+        best = None
+        best_dist = float("inf")
+        for s in smile:
+            d = abs(s[key]) if s[key] is not None else None
+            if d is None:
+                continue
+            dist = abs(d - target_delta)
+            if dist < best_dist and s[iv_key] is not None:
+                best_dist = dist
+                best = s[iv_key]
+        return best
+
+    c25 = _find_delta_iv(0.25, "call")
+    p25 = _find_delta_iv(0.25, "put")
+    c10 = _find_delta_iv(0.10, "call")
+    p10 = _find_delta_iv(0.10, "put")
+
+    rr25 = round(p25 - c25, 2) if (p25 and c25) else None
+    fly25 = round((p25 + c25) / 2 - atm_iv, 2) if (p25 and c25 and atm_iv) else None
+    rr10 = round(p10 - c10, 2) if (p10 and c10) else None
+
+    if rr25 is None:
+        skew_dir = "neutral"
+    elif rr25 > 1.0:
+        skew_dir = "put_skew"
+    elif rr25 < -1.0:
+        skew_dir = "call_skew"
+    else:
+        skew_dir = "neutral"
+
+    return {
+        "timestamp": ist_now().isoformat(),
+        "expiry_date": expiry,
+        "spot_price": round(spot, 2),
+        "smile": smile,
+        "atm_iv": atm_iv,
+        "call_25d_iv": c25,
+        "put_25d_iv": p25,
+        "call_10d_iv": c10,
+        "put_10d_iv": p10,
+        "rr25": rr25,
+        "fly25": fly25,
+        "rr10": rr10,
+        "skew_direction": skew_dir,
+        "skew_note": (
+            "Put vol > Call vol — market paying for downside protection" if skew_dir == "put_skew"
+            else "Call vol > Put vol — market positioned for upside" if skew_dir == "call_skew"
+            else "Skew near neutral — no strong directional premium"
+        ),
+    }
+
+
+async def load_oi_trend(expiry: str | None = None, days: int = 10) -> dict:
+    """
+    Return 10-day per-strike OI trend for key strikes around ATM.
+    Used to distinguish fresh build-up from short-covering / long-unwinding.
+    """
+    from app.db.database import get_ts_session
+    from sqlalchemy import text
+    from datetime import date as date_type
+
+    expiries = await get_active_expiries()
+    if not expiries:
+        return {"dates": [], "series": [], "expiry": None}
+
+    near = expiries[0]
+    next_e = expiries[1] if len(expiries) > 1 else None
+    dte = days_to_expiry(near)
+    use_next = dte <= 3 and next_e is not None
+    active_expiry = expiry or (next_e if use_next else near)
+
+    expiry_dt = date_type.fromisoformat(active_expiry)
+    cutoff = ist_now().date() - timedelta(days=days * 3)
+
+    async with get_ts_session() as session:
+        # Get last N distinct trading dates
+        date_rows = (await session.execute(text("""
+            SELECT DISTINCT date FROM options_eod_snapshots
+            WHERE expiry = :exp AND date >= :cutoff
+            ORDER BY date DESC LIMIT :days
+        """), {"exp": expiry_dt, "cutoff": cutoff, "days": days})).all()
+
+        if not date_rows:
+            return {"dates": [], "series": [], "expiry": active_expiry}
+
+        raw_dates = sorted([str(r[0]) for r in date_rows])
+        parsed_dates = [date_type.fromisoformat(d) for d in raw_dates]
+
+        # Get latest spot to determine ATM
+        spot_row = (await session.execute(text("""
+            SELECT spot_price FROM options_eod_snapshots
+            WHERE expiry = :exp ORDER BY date DESC LIMIT 1
+        """), {"exp": expiry_dt})).first()
+        spot = float(spot_row[0]) if spot_row else 24000.0
+        atm = atm_strike(spot)
+
+        # Fetch ATM ± 250 pts
+        lo, hi = atm - 250, atm + 250
+        rows = (await session.execute(text("""
+            SELECT date, strike, ce_oi, pe_oi
+            FROM options_eod_snapshots
+            WHERE expiry = :exp AND date = ANY(:dates)
+              AND strike BETWEEN :lo AND :hi
+            ORDER BY date ASC, strike ASC
+        """), {"exp": expiry_dt, "dates": parsed_dates, "lo": lo, "hi": hi})).mappings().all()
+
+    # Build matrix: {strike: {date: {ce_oi, pe_oi}}}
+    from collections import defaultdict
+    matrix: dict[float, dict[str, dict]] = defaultdict(dict)
+    for r in rows:
+        matrix[float(r["strike"])][str(r["date"])] = {
+            "ce_oi": int(r["ce_oi"] or 0),
+            "pe_oi": int(r["pe_oi"] or 0),
+        }
+
+    all_strikes = sorted(matrix.keys())
+    series = []
+    for strike in all_strikes:
+        ce_series = [matrix[strike].get(d, {}).get("ce_oi", 0) for d in raw_dates]
+        pe_series = [matrix[strike].get(d, {}).get("pe_oi", 0) for d in raw_dates]
+
+        # Change from first day to last day (% change if first day > 0)
+        ce_chg = ce_series[-1] - ce_series[0] if ce_series else 0
+        pe_chg = pe_series[-1] - pe_series[0] if pe_series else 0
+
+        # Classify build/unwind — need ≥2 data points to determine trend
+        def _classify(series: list[int], chg: int) -> str:
+            if not any(series):
+                return "no_data"
+            if len(series) <= 1:
+                return "no_data"
+            if chg > 0:
+                return "build"
+            if chg < 0:
+                return "unwind"
+            return "flat"
+
+        series.append({
+            "strike": strike,
+            "is_atm": strike == atm,
+            "ce_oi": ce_series,
+            "pe_oi": pe_series,
+            "ce_change": ce_chg,
+            "pe_change": pe_chg,
+            "ce_status": _classify(ce_series, ce_chg),
+            "pe_status": _classify(pe_series, pe_chg),
+        })
+
+    return {
+        "expiry": active_expiry,
+        "spot_price": round(spot, 2),
+        "atm_strike": atm,
+        "dates": raw_dates,
+        "series": series,
+    }

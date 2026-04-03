@@ -135,6 +135,7 @@ async def _fetch_candles_from_upstox(instrument_key: str, symbol: str) -> list[l
     url = f"https://api.upstox.com/v2/historical-candle/{encoded}/day/{to_date}"
     async with httpx.AsyncClient(timeout=30) as c:
         r = await c.get(url, headers={"Authorization": f"Bearer {token}", "Accept": "application/json"})
+        r.raise_for_status()
         data = r.json()
         candles = data.get("data", {}).get("candles", [])
         return candles  # newest-first
@@ -208,11 +209,11 @@ def compute_breadth_analytics(
     nifty_map: dict[str, float] = {r["date"]: r["close"] for r in nifty_candles}
     futures_map: dict[str, int] = {r["date"]: r.get("near_volume", 0) for r in futures_data}
 
-    # Find the union of all dates (last 60)
+    # Build all_dates from equity candles only — Nifty data may be more recent
+    # (equity refresh lags), so including Nifty-only dates would add zero-volume rows
     all_dates_set: set[str] = set()
     for rows in candles_by_symbol.values():
         all_dates_set.update(r["date"] for r in rows)
-    all_dates_set.update(nifty_map.keys())
     all_dates = sorted(all_dates_set)[-60:]
 
     # Build per-symbol date→candle lookup
@@ -426,7 +427,7 @@ def compute_breadth_analytics(
 
     return {
         "config": {
-            "last_updated": "see data/nifty50_constituents.json",
+            "last_updated": "unknown",
             "weights_stale": False,
             "n_constituents": len(constituents),
         },
@@ -485,7 +486,7 @@ async def build_breadth_analytics() -> dict:
             text("""
                 SELECT DATE(timestamp AT TIME ZONE 'Asia/Kolkata') AS date, close
                 FROM candles
-                WHERE symbol = 'NSE_INDEX|Nifty 50' AND interval = '1day' AND timestamp >= :cutoff
+                WHERE symbol = 'NIFTY_50' AND interval = '1day' AND timestamp >= :cutoff
                 ORDER BY timestamp ASC
             """),
             {"cutoff": cutoff},
@@ -507,4 +508,118 @@ async def build_breadth_analytics() -> dict:
     except Exception as e:
         logger.warning(f"Could not load futures data for breadth overlay: {e}")
 
-    return compute_breadth_analytics(candles_by_symbol, nifty_candles, futures_data, constituents)
+    result = compute_breadth_analytics(candles_by_symbol, nifty_candles, futures_data, constituents)
+    result["config"]["last_updated"] = cfg["last_updated"]
+    result["config"]["weights_stale"] = cfg["weights_age_days"] > WEIGHTS_STALE_DAYS
+    return result
+
+
+async def compute_advance_decline(days: int = 30) -> dict:
+    """
+    Compute Advance-Decline ratio for Nifty 50 constituents.
+
+    For each trading day in the last `days` days:
+      - advance: stocks with close > prev_close
+      - decline: stocks with close < prev_close
+      - unchanged: stocks flat
+      - a_d_ratio: advances / max(declines, 1)
+      - breadth_pct: advances / total * 100
+      - cumulative_ad_line: running sum of (advances - declines) — trend indicator
+
+    Returns daily series + latest summary.
+    """
+    cfg = load_constituents()
+    constituents = cfg["constituents"]
+    cutoff = ist_now().date() - timedelta(days=days + 10)
+
+    from app.db.database import get_ts_session
+    from sqlalchemy import text
+
+    # Load close prices for all constituents from DB
+    symbols = [c["symbol"] for c in constituents]
+    db_syms = [f"EQ_{s}" for s in symbols]
+
+    async with get_ts_session() as session:
+        r = await session.execute(
+            text("""
+                SELECT DATE(timestamp AT TIME ZONE 'Asia/Kolkata') AS date,
+                       symbol,
+                       close
+                FROM candles
+                WHERE symbol = ANY(:syms)
+                  AND interval = '1day'
+                  AND timestamp >= :cutoff
+                ORDER BY date ASC
+            """),
+            {"syms": db_syms, "cutoff": cutoff},
+        )
+        rows = r.mappings().all()
+
+    # Build {date: {symbol: close}}
+    from collections import defaultdict
+    date_sym_close: dict[str, dict[str, float]] = defaultdict(dict)
+    for row in rows:
+        d = str(row["date"])
+        sym = str(row["symbol"]).replace("EQ_", "")
+        date_sym_close[d][sym] = float(row["close"])
+
+    all_dates = sorted(date_sym_close.keys())
+    series = []
+    cum_ad = 0
+
+    for i, d in enumerate(all_dates):
+        if i == 0:
+            continue  # need prev day to compare
+        prev = all_dates[i - 1]
+        advances = 0
+        declines = 0
+        unchanged = 0
+        for sym in symbols:
+            cur = date_sym_close[d].get(sym)
+            prv = date_sym_close[prev].get(sym)
+            if cur is None or prv is None:
+                continue
+            if cur > prv:
+                advances += 1
+            elif cur < prv:
+                declines += 1
+            else:
+                unchanged += 1
+        total = advances + declines + unchanged
+        cum_ad += (advances - declines)
+        if total > 0:
+            series.append({
+                "date": d,
+                "advances": advances,
+                "declines": declines,
+                "unchanged": unchanged,
+                "total": total,
+                "a_d_ratio": round(advances / max(declines, 1), 2),
+                "breadth_pct": round(advances / total * 100, 1),
+                "cum_ad_line": cum_ad,
+            })
+
+    # Trim to requested days
+    series = series[-days:]
+
+    # 5-day moving average of breadth_pct
+    for i, s in enumerate(series):
+        window = [series[j]["breadth_pct"] for j in range(max(0, i - 4), i + 1)]
+        s["breadth_ma5"] = round(sum(window) / len(window), 1)
+
+    latest = series[-1] if series else {}
+    prev5 = series[-6:-1] if len(series) >= 6 else []
+    avg5 = round(sum(s["breadth_pct"] for s in prev5) / len(prev5), 1) if prev5 else None
+
+    return {
+        "series": series,
+        "latest": latest,
+        "avg_breadth_5d": avg5,
+        "trend": (
+            "improving" if avg5 and latest.get("breadth_pct", 50) > avg5
+            else "deteriorating" if avg5 and latest.get("breadth_pct", 50) < avg5
+            else "stable"
+        ),
+        "data_points": len(series),
+        "constituents_tracked": len(symbols),
+    }

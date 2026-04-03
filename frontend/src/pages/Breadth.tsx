@@ -2,6 +2,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
   getBreadthAnalytics, triggerBreadthRefresh,
   VolumeSeriesRow, BreadthSeriesRow, SectorSeriesRow, HeavyweightRow, HeatmapRow,
+  getAdvanceDecline, RsSignal,
 } from '../lib/api';
 import {
   ComposedChart, AreaChart, Area, Bar, Line, XAxis, YAxis,
@@ -12,8 +13,9 @@ import { useDashboard } from '../context/DashboardContext';
 import { useMemo, useState } from 'react';
 import {
   AlertTriangle, Info, TrendingUp, TrendingDown, Minus,
-  BarChart2, RefreshCw, Eye, EyeOff,
+  BarChart2, RefreshCw, Eye, EyeOff, Activity,
 } from 'lucide-react';
+import { useSectorRS } from '../hooks/useIndicators';
 
 // ── Design tokens & helpers ───────────────────────────────────────────────────
 const SECTOR_COLORS: Record<string, string> = {
@@ -382,12 +384,276 @@ function AlertsBanner({ alerts }: { alerts: { type: string; msg: string }[] }) {
   );
 }
 
+// ── Panel 8: Advance-Decline ──────────────────────────────────────────────────
+
+const tooltipStyle2 = {
+  backgroundColor: '#1e293b',
+  border: '1px solid #334155',
+  borderRadius: '8px',
+  color: '#f1f5f9',
+  fontSize: '12px',
+};
+
+function AdvanceDeclinePanel() {
+  const { data, isLoading, error, refetch: refetchAD } = useQuery({
+    queryKey: ['advance-decline'],
+    queryFn: () => getAdvanceDecline(30),
+    refetchInterval: 10 * 60 * 1000,
+    retry: 1,
+  });
+
+  if (isLoading) return <div className="panel-card animate-pulse h-64 flex items-center justify-center text-slate-500 text-sm">Loading A-D data…</div>;
+  if (error || !data || !data.series.length) return (
+    <div className="panel-card h-28 flex flex-col items-center justify-center gap-3">
+      <div className="text-slate-500 text-sm">
+        {error instanceof Error ? error.message : 'Advance-Decline data unavailable — constituent candles not yet loaded'}
+      </div>
+      <button onClick={() => refetchAD()} className="flex items-center gap-1 px-3 py-1.5 text-xs bg-slate-700 hover:bg-slate-600 rounded transition-colors">
+        <RefreshCw size={12} /> Retry
+      </button>
+    </div>
+  );
+
+  const { series, latest, avg_breadth_5d, trend, constituents_tracked } = data;
+
+  const latest_typed = latest as {
+    advances?: number; declines?: number; breadth_pct?: number; a_d_ratio?: number;
+  };
+
+  const trendColor = trend === 'improving' ? 'text-emerald-400' : trend === 'deteriorating' ? 'text-red-400' : 'text-slate-400';
+
+  const chartData = series.map(s => ({
+    date: new Date(s.date).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' }),
+    Advances: s.advances,
+    Declines: -s.declines, // negative so they stack downward visually
+    Breadth: s.breadth_pct,
+    MA5: s.breadth_ma5,
+    ADLine: s.cum_ad_line,
+  }));
+
+  return (
+    <div className="panel-card">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-200">Advance-Decline Ratio</h3>
+          <p className="text-xs text-slate-500 mt-0.5">Nifty 50 constituents · {constituents_tracked} stocks tracked</p>
+        </div>
+        <div className={`text-xs font-semibold ${trendColor} bg-slate-800/60 rounded px-2 py-1`}>
+          {trend === 'improving' ? 'Improving ↑' : trend === 'deteriorating' ? 'Deteriorating ↓' : 'Stable →'}
+        </div>
+      </div>
+
+      {/* Summary cards */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 mb-4">
+        <div className="bg-slate-800/60 rounded p-2 text-center">
+          <div className="text-xs text-slate-400">Advances</div>
+          <div className="text-lg font-bold text-emerald-400">{latest_typed.advances ?? '—'}</div>
+        </div>
+        <div className="bg-slate-800/60 rounded p-2 text-center">
+          <div className="text-xs text-slate-400">Declines</div>
+          <div className="text-lg font-bold text-red-400">{latest_typed.declines ?? '—'}</div>
+        </div>
+        <div className="bg-slate-800/60 rounded p-2 text-center">
+          <div className="text-xs text-slate-400">Breadth %</div>
+          <div className={`text-lg font-bold ${(latest_typed.breadth_pct ?? 0) >= 60 ? 'text-emerald-400' : (latest_typed.breadth_pct ?? 0) < 40 ? 'text-red-400' : 'text-amber-400'}`}>
+            {latest_typed.breadth_pct?.toFixed(0) ?? '—'}%
+          </div>
+        </div>
+        <div className="bg-slate-800/60 rounded p-2 text-center">
+          <div className="text-xs text-slate-400">A-D Ratio</div>
+          <div className="text-lg font-bold text-slate-200">{latest_typed.a_d_ratio?.toFixed(1) ?? '—'}</div>
+          {avg_breadth_5d != null && <div className="text-xs text-slate-500">5d avg: {avg_breadth_5d}%</div>}
+        </div>
+      </div>
+
+      {/* Breadth % chart with MA5 */}
+      <div className="mb-1 text-xs text-slate-500">Breadth % (advances / total)</div>
+      <ResponsiveContainer width="100%" height={160}>
+        <ComposedChart data={chartData} margin={{ top: 4, right: 16, bottom: 4, left: -16 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+          <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 10 }} />
+          <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} unit="%" domain={[0, 100]} />
+          <Tooltip contentStyle={tooltipStyle2} formatter={(v: number, name: string) => [`${Number(v).toFixed(1)}%`, name]} />
+          <ReferenceLine y={50} stroke="#475569" strokeDasharray="3 3" />
+          <Bar dataKey="Breadth" fill="#3b82f6" opacity={0.5} name="Breadth %" />
+          <Line type="monotone" dataKey="MA5" stroke="#f59e0b" dot={false} strokeWidth={2} name="MA5" />
+        </ComposedChart>
+      </ResponsiveContainer>
+
+      {/* Cumulative A-D Line */}
+      <div className="mt-3 mb-1 text-xs text-slate-500">Cumulative A-D Line (trend indicator)</div>
+      <ResponsiveContainer width="100%" height={100}>
+        <AreaChart data={chartData} margin={{ top: 4, right: 16, bottom: 4, left: -16 }}>
+          <defs>
+            <linearGradient id="adGrad" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="5%" stopColor="#a78bfa" stopOpacity={0.3} />
+              <stop offset="95%" stopColor="#a78bfa" stopOpacity={0} />
+            </linearGradient>
+          </defs>
+          <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+          <XAxis dataKey="date" tick={{ fill: '#94a3b8', fontSize: 10 }} />
+          <YAxis tick={{ fill: '#94a3b8', fontSize: 10 }} />
+          <Tooltip contentStyle={tooltipStyle2} />
+          <Area type="monotone" dataKey="ADLine" stroke="#a78bfa" fill="url(#adGrad)" strokeWidth={2} name="Cum A-D" dot={false} />
+        </AreaChart>
+      </ResponsiveContainer>
+
+      <p className="text-xs text-slate-600 mt-2">
+        Rising A-D line = broad participation. Divergence (index up, A-D flat) = concentration risk.
+      </p>
+    </div>
+  );
+}
+
+// ── Sector Relative Strength ──────────────────────────────────────────────────
+
+const RS_SIGNAL_CFG: Record<RsSignal, { label: string; color: string; dot: string }> = {
+  outperforming:  { label: 'Outperforming ↑', color: 'text-emerald-400', dot: 'bg-emerald-400' },
+  fading_leader:  { label: 'Fading ↗',        color: 'text-yellow-400',  dot: 'bg-yellow-400'  },
+  recovering:     { label: 'Recovering ↗',    color: 'text-blue-400',    dot: 'bg-blue-400'    },
+  neutral:        { label: 'Neutral →',        color: 'text-slate-400',   dot: 'bg-slate-400'   },
+  underperforming:{ label: 'Lagging ↓',       color: 'text-red-400',     dot: 'bg-red-400'     },
+};
+
+function SectorRSPanel() {
+  const { data, isLoading, error } = useSectorRS(60);
+
+  if (isLoading) return (
+    <div className="chart-card animate-pulse h-72 flex items-center justify-center text-slate-500 text-sm">
+      Loading sector relative strength…
+    </div>
+  );
+
+  if (error || !data || data.error || !data.series?.length) return (
+    <div className="chart-card h-24 flex items-center justify-center text-slate-500 text-sm">
+      Sector RS unavailable — market may be closed
+    </div>
+  );
+
+  const { series, current, market_note, base_date } = data;
+  const finCfg = RS_SIGNAL_CFG[current.financials_signal];
+  const itCfg  = RS_SIGNAL_CFG[current.it_signal];
+
+  const fmtPct = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}%`;
+  const fmtRs  = (v: number) => v.toFixed(2);
+
+  const noteColor =
+    market_note.includes('conviction') ? 'text-emerald-300' :
+    market_note.includes('narrow') || market_note.includes('avoid') ? 'text-red-300' :
+    market_note.includes('fading') ? 'text-amber-300' : 'text-slate-400';
+
+  const tt = {
+    backgroundColor: '#1e293b', border: '1px solid #334155',
+    borderRadius: '8px', color: '#f1f5f9', fontSize: '11px',
+  };
+
+  return (
+    <div className="chart-card space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div className="flex items-center gap-2">
+          <Activity size={18} className="text-cyan-400" />
+          <div>
+            <h2 className="text-lg font-semibold">Sector Relative Strength</h2>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Financials & IT vs Nifty 50 · weight-adjusted from constituents · RS = 100 on {base_date}
+            </p>
+          </div>
+        </div>
+        <div className="flex gap-3">
+          <div className="bg-slate-800/60 rounded-lg px-3 py-2 text-center min-w-[90px]">
+            <div className="text-xs text-slate-400 mb-0.5">Financials RS</div>
+            <div className="text-lg font-bold text-blue-400">{fmtRs(current.financials_rs)}</div>
+            <div className={`text-xs font-semibold mt-0.5 ${finCfg.color}`}>{finCfg.label}</div>
+          </div>
+          <div className="bg-slate-800/60 rounded-lg px-3 py-2 text-center min-w-[90px]">
+            <div className="text-xs text-slate-400 mb-0.5">IT RS</div>
+            <div className="text-lg font-bold text-violet-400">{fmtRs(current.it_rs)}</div>
+            <div className={`text-xs font-semibold mt-0.5 ${itCfg.color}`}>{itCfg.label}</div>
+          </div>
+        </div>
+      </div>
+
+      {/* RS chart */}
+      <ResponsiveContainer width="100%" height={220}>
+        <ComposedChart data={series} margin={{ top: 4, right: 16, bottom: 4, left: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#1e293b" />
+          <XAxis dataKey="date"
+            tick={{ fill: '#64748b', fontSize: 9 }}
+            tickFormatter={d => new Date(d).toLocaleDateString('en-IN', { day: '2-digit', month: 'short' })}
+            interval="preserveStartEnd"
+          />
+          <YAxis domain={['auto', 'auto']} tick={{ fill: '#94a3b8', fontSize: 10 }} width={42} />
+          <Tooltip
+            contentStyle={tt}
+            formatter={(v: unknown, name: string) => [
+              `${Number(v).toFixed(2)}`,
+              name === 'financials_rs' ? 'Financials RS' : 'IT RS',
+            ]}
+            labelFormatter={l => `Date: ${l}`}
+          />
+          <ReferenceLine y={100} stroke="#475569" strokeDasharray="4 4" strokeWidth={1.5}
+            label={{ value: '100 (parity)', fill: '#64748b', fontSize: 9, position: 'left' }} />
+          <ReferenceArea y1={102} y2={130} fill="#22c55e" fillOpacity={0.04} />
+          <ReferenceArea y1={70}  y2={98}  fill="#ef4444" fillOpacity={0.04} />
+          <Line type="monotone" dataKey="financials_rs" stroke="#60a5fa" strokeWidth={2} dot={false} name="financials_rs" connectNulls />
+          <Line type="monotone" dataKey="it_rs"         stroke="#a78bfa" strokeWidth={2} dot={false} name="it_rs"         connectNulls />
+        </ComposedChart>
+      </ResponsiveContainer>
+
+      {/* Today's stats row */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+        <div className="bg-slate-800/50 rounded p-2 text-center">
+          <div className="text-xs text-slate-400">Nifty Today</div>
+          <div className={`text-sm font-bold ${current.nifty_today_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {fmtPct(current.nifty_today_pct)}
+          </div>
+        </div>
+        <div className="bg-slate-800/50 rounded p-2 text-center">
+          <div className="text-xs text-slate-400">Financials Today</div>
+          <div className={`text-sm font-bold ${current.fin_today_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {fmtPct(current.fin_today_pct)}
+          </div>
+          <div className={`text-xs ${current.fin_rel_today >= 0 ? 'text-blue-400' : 'text-orange-400'}`}>
+            {fmtPct(current.fin_rel_today)} vs Nifty
+          </div>
+        </div>
+        <div className="bg-slate-800/50 rounded p-2 text-center">
+          <div className="text-xs text-slate-400">IT Today</div>
+          <div className={`text-sm font-bold ${current.it_today_pct >= 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+            {fmtPct(current.it_today_pct)}
+          </div>
+          <div className={`text-xs ${current.it_rel_today >= 0 ? 'text-violet-400' : 'text-orange-400'}`}>
+            {fmtPct(current.it_rel_today)} vs Nifty
+          </div>
+        </div>
+        <div className="bg-slate-800/50 rounded p-2 text-center">
+          <div className="text-xs text-slate-400">5-day Slope</div>
+          <div className="text-xs font-semibold text-blue-400">Fin: {current.financials_5d_slope >= 0 ? '+' : ''}{current.financials_5d_slope}</div>
+          <div className="text-xs font-semibold text-violet-400">IT: {current.it_5d_slope >= 0 ? '+' : ''}{current.it_5d_slope}</div>
+          <div className="text-xs text-slate-600 mt-0.5">RS pts/day</div>
+        </div>
+      </div>
+
+      <div className={`text-xs rounded px-3 py-2 bg-slate-800/40 border border-slate-700/30 ${noteColor}`}>
+        {market_note}
+      </div>
+
+      <div className="flex gap-6 text-xs text-slate-500">
+        <span><span className="text-blue-400 font-semibold">Blue</span> = Financials (13 stocks, ~35% weight)</span>
+        <span><span className="text-violet-400 font-semibold">Purple</span> = IT (5 stocks, ~15% weight)</span>
+        <span className="ml-auto">Above 100 = outperforming Nifty since {base_date}</span>
+      </div>
+    </div>
+  );
+}
+
 // ── Main Page ─────────────────────────────────────────────────────────────────
 export default function Breadth() {
   const qc = useQueryClient();
   const { hideExpiry } = useDashboard();
 
-  const { data, isLoading, error } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['breadth-analytics'],
     queryFn: getBreadthAnalytics,
     refetchInterval: 10 * 60 * 1000,
@@ -412,6 +678,13 @@ export default function Breadth() {
       <div className="min-h-screen bg-slate-900 flex flex-col items-center justify-center gap-4">
         <AlertTriangle size={40} className="text-red-400" />
         <div className="text-red-400">Failed to load breadth data</div>
+        <div className="text-slate-500 text-sm">{error instanceof Error ? error.message : 'Unknown error'}</div>
+        <button
+          onClick={() => refetch()}
+          className="flex items-center gap-2 px-4 py-2 bg-slate-700 hover:bg-slate-600 rounded-lg text-sm transition-colors"
+        >
+          <RefreshCw size={14} /> Retry
+        </button>
       </div>
     );
   }
@@ -449,8 +722,8 @@ export default function Breadth() {
     summary.conviction === 'Broad' ? 'text-green-400' :
     summary.conviction === 'Heavyweight-driven' ? 'text-orange-400' : 'text-yellow-300';
 
-  const filteredVolSeries = hideExpiry ? volume_series : volume_series;
-  const filteredBreadthSeries = hideExpiry ? breadth_series : breadth_series;
+  const filteredVolSeries = volume_series;
+  const filteredBreadthSeries = breadth_series;
 
   return (
     <div className="min-h-screen bg-slate-900 text-white p-6 space-y-6 page-enter">
@@ -510,9 +783,9 @@ export default function Breadth() {
           color="text-blue-400"
         />
         <StatCard
-          label="52-wk Vol Highs"
+          label="Vol Highs (60d)"
           value={String(summary.high_vol_count)}
-          sub="stocks at record volume"
+          sub="stocks at 60d volume high"
           color={summary.high_vol_count >= 5 ? 'text-yellow-400' : 'text-slate-300'}
         />
       </div>
@@ -531,6 +804,12 @@ export default function Breadth() {
         <SectorRotationChart data={sector_series} />
         <HeavyweightView data={heavyweight_today} />
       </div>
+
+      {/* Panel 8: Advance-Decline */}
+      <AdvanceDeclinePanel />
+
+      {/* Panel 9: Sector Relative Strength */}
+      <SectorRSPanel />
     </div>
   );
 }

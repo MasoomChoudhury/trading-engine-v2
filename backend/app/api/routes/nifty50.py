@@ -190,7 +190,8 @@ async def get_indicators(
             else:
                 indicators[k] = v
         elif k.startswith("stoch_rsi_"):
-            indicators[k.replace("stoch_rsi_", "stoch_rsi_")] = v
+            # flat keys: stoch_rsi_k, stoch_rsi_d, stoch_rsi_value → keep as-is
+            indicators[k] = v
         elif k.startswith("adx_"):
             indicators[k] = v
         elif k.startswith("atr_"):
@@ -202,28 +203,29 @@ async def get_indicators(
         else:
             indicators[k] = v
 
-    # Ensure consistent keys for frontend
+    # Ensure consistent keys for frontend — use keys actually set in the loop above
     indicators = {
-        "rsi_14": indicators.get("rsi_value"),
-        "ema_20": indicators.get("ema_ema_20"),
-        "ema_21": indicators.get("ema_ema_21"),
-        "ema_50": indicators.get("ema_ema_50"),
-        "sma_200": indicators.get("sma_sma_200"),
-        "macd_line": indicators.get("macd_macd_line"),
-        "macd_signal": indicators.get("macd_signal_line"),
-        "macd_histogram": indicators.get("macd_histogram"),
-        "bb_upper": indicators.get("bollinger_upper"),
-        "bb_middle": indicators.get("bollinger_middle"),
-        "bb_lower": indicators.get("bollinger_lower"),
-        "supertrend": indicators.get("supertrend_value"),
+        "rsi_14":             indicators.get("rsi_14"),
+        "ema_20":             indicators.get("ema_20"),
+        "ema_21":             indicators.get("ema_21"),
+        "ema_50":             indicators.get("ema_50"),
+        "sma_200":            indicators.get("sma_200"),
+        "macd_line":          indicators.get("macd_line"),
+        "macd_signal":        indicators.get("macd_signal"),
+        "macd_histogram":     indicators.get("macd_histogram"),
+        "bb_upper":           indicators.get("bollinger_upper"),
+        "bb_middle":          indicators.get("bollinger_middle"),
+        "bb_lower":           indicators.get("bollinger_lower"),
+        "supertrend":         indicators.get("supertrend_value"),
         "supertrend_direction": indicators.get("supertrend_direction"),
-        "stoch_rsi_k": indicators.get("stoch_rsi_value"),
-        "stoch_rsi_d": indicators.get("stoch_rsi_value"),
-        "adx_14": indicators.get("adx_adx"),
-        "plus_di_14": indicators.get("adx_plus_di"),
-        "minus_di_14": indicators.get("adx_minus_di"),
-        "atr_14": indicators.get("atr_value"),
-        "vwap": indicators.get("vwap_value"),
+        # StochRSI: K is smoothed %K, D is signal (SMA of K) — they differ
+        "stoch_rsi_k":        indicators.get("stoch_rsi_k"),
+        "stoch_rsi_d":        indicators.get("stoch_rsi_d"),
+        "adx_14":             indicators.get("adx_adx"),
+        "plus_di_14":         indicators.get("adx_plus_di"),
+        "minus_di_14":        indicators.get("adx_minus_di"),
+        "atr_14":             indicators.get("atr_value"),
+        "vwap":               indicators.get("vwap_value"),
     }
 
     # Use the last candle's timestamp as the actual data time
@@ -343,13 +345,15 @@ async def get_gex(expiry_date: str | None = Query(default=None)):
         net_gex=round(gex_result.net_gex, 2),
         regime=gex_result.regime,
         regime_description=gex_result.regime_description,
-        zero_gamma_level=round(gex_result.zero_gamma_level, 2) if gex_result.zero_gamma_level else 0.0,
+        # zero_gamma_level: None when no zero crossing (uniformly negative GEX) — keep as None, not 0
+        zero_gamma_level=round(gex_result.zero_gamma_level, 2) if gex_result.zero_gamma_level is not None else None,
         call_wall=round(gex_result.call_wall, 2) if gex_result.call_wall else 0.0,
         put_wall=round(gex_result.put_wall, 2) if gex_result.put_wall else 0.0,
         pcr=round(gex_result.pcr_oi, 4) if gex_result.pcr_oi else 0.0,
         strike_gex=strikes,
-        call_wall_distance=round((spot - (gex_result.call_wall or 0)) / spot * 100, 2) if gex_result.call_wall and spot else 0.0,
-        put_wall_distance=round((spot - (gex_result.put_wall or 0)) / spot * 100, 2) if gex_result.put_wall and spot else 0.0,
+        # Distance: positive = wall ABOVE spot, negative = wall BELOW spot
+        call_wall_distance=round((gex_result.call_wall - spot) / spot * 100, 2) if gex_result.call_wall and spot else 0.0,
+        put_wall_distance=round((gex_result.put_wall - spot) / spot * 100, 2) if gex_result.put_wall and spot else 0.0,
     )
 
 
@@ -388,6 +392,156 @@ async def get_indicator_series(
 
     series = calculate_indicator_series(candles)
     return series[-limit:]
+
+
+@router.get("/gex-history")
+async def get_gex_history(days: int = Query(default=90, ge=7, le=180)):
+    """
+    Return daily GEX history (one value per day, EOD snapshot) and a
+    percentile rank of the current total_gex vs the historical window.
+    """
+    from sqlalchemy import func as sqlfunc, cast
+    from sqlalchemy.types import Date
+
+    cutoff = ist_now() - timedelta(days=days)
+
+    async with get_ts_session() as session:
+        # One value per calendar day: last snapshot of day, nearest expiry only
+        # Group by IST date and take max(total_gex) (all snapshots same day should agree)
+        stmt = (
+            select(
+                cast(GexSnapshot.timestamp.op("AT TIME ZONE")("Asia/Kolkata"), Date).label("day"),
+                sqlfunc.max(GexSnapshot.total_gex).label("total_gex"),
+                sqlfunc.max(GexSnapshot.net_gex).label("net_gex"),
+                sqlfunc.max(GexSnapshot.spot_price).label("spot_price"),
+                sqlfunc.max(GexSnapshot.zero_gamma_level).label("zero_gamma_level"),
+            )
+            .where(GexSnapshot.timestamp >= cutoff)
+            .group_by("day")
+            .order_by("day")
+        )
+        detail_rows = (await session.execute(stmt)).all()
+
+        if not detail_rows:
+            return {"history": [], "percentile_rank": None, "days": days, "current_gex": None,
+                    "percentile_label": None, "data_points": 0}
+
+    history = []
+    gex_values = []
+    for row in detail_rows:
+        # row: (day:date, total_gex, net_gex, spot_price, zero_gamma_level)
+        day_val = row[0]
+        date_str = day_val.isoformat() if hasattr(day_val, 'isoformat') else str(day_val)
+        total_gex = float(row[1]) if row[1] is not None else None
+        if total_gex is not None:
+            gex_values.append(total_gex)
+        history.append({
+            "date": date_str,
+            "total_gex": round(total_gex, 2) if total_gex is not None else None,
+            "net_gex": round(float(row[2]), 2) if row[2] is not None else None,
+            "spot_price": round(float(row[3]), 2) if row[3] is not None else None,
+            "zero_gamma_level": round(float(row[4]), 2) if row[4] is not None else None,
+        })
+
+    # Percentile rank: what fraction of historical values is <= current
+    percentile_rank = None
+    current_gex = None
+    if history and gex_values:
+        current_gex = history[-1]["total_gex"]
+        if current_gex is not None and len(gex_values) > 1:
+            below = sum(1 for v in gex_values if v <= current_gex)
+            percentile_rank = round(below / len(gex_values) * 100, 1)
+
+    # Descriptive label for the percentile
+    label = None
+    if percentile_rank is not None:
+        if percentile_rank <= 10:
+            label = "Extreme negative — rare low"
+        elif percentile_rank <= 25:
+            label = "Low quartile — elevated vol risk"
+        elif percentile_rank <= 50:
+            label = "Below median — mildly negative"
+        elif percentile_rank <= 75:
+            label = "Above median — moderate positive"
+        elif percentile_rank <= 90:
+            label = "High quartile — vol suppressed"
+        else:
+            label = "Extreme positive — very range-bound"
+
+    return {
+        "history": history,
+        "current_gex": current_gex,
+        "percentile_rank": percentile_rank,
+        "percentile_label": label,
+        "days": days,
+        "data_points": len(history),
+    }
+
+
+@router.get("/depth")
+async def get_market_depth():
+    """
+    Market depth (Level 2) for Nifty 50 index.
+    Returns top 5 bid/ask levels with quantities and cumulative totals.
+    Derived from Upstox full market quote.
+    """
+    try:
+        quote = await upstox_client.get_full_quote(NIFTY_KEY)
+        depth = quote.get("depth") or {}
+        bids_raw = depth.get("buy") or []
+        asks_raw = depth.get("sell") or []
+
+        def _parse_levels(raw: list) -> list[dict]:
+            out = []
+            for lvl in raw[:5]:
+                price = float(lvl.get("price") or 0)
+                qty   = int(lvl.get("quantity") or 0)
+                orders = int(lvl.get("orders") or 0)
+                if price:
+                    out.append({"price": price, "quantity": qty, "orders": orders})
+            return out
+
+        bids = _parse_levels(bids_raw)
+        asks = _parse_levels(asks_raw)
+
+        total_bid_qty = sum(b["quantity"] for b in bids)
+        total_ask_qty = sum(a["quantity"] for a in asks)
+        total_qty = total_bid_qty + total_ask_qty
+
+        ltp = float(quote.get("last_price") or 0)
+        spread = round(asks[0]["price"] - bids[0]["price"], 2) if bids and asks else None
+        spread_pct = round(spread / ltp * 100, 4) if spread and ltp else None
+
+        return {
+            "timestamp": ist_now().isoformat(),
+            "symbol": SYMBOL,
+            "ltp": ltp,
+            "bids": bids,
+            "asks": asks,
+            "total_bid_qty": total_bid_qty,
+            "total_ask_qty": total_ask_qty,
+            "bid_ask_ratio": round(total_bid_qty / max(total_ask_qty, 1), 3),
+            "buy_pressure_pct": round(total_bid_qty / max(total_qty, 1) * 100, 1),
+            "spread": spread,
+            "spread_pct": spread_pct,
+            "note": quote.get("instrument_token") and "live" or "stale",
+        }
+    except Exception as e:
+        logger.error(f"Market depth failed: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/vix")
+async def get_india_vix():
+    """Get India VIX, regime classification, and HV20 from NSE."""
+    from app.services.vix_service import get_india_vix as _get_india_vix
+    try:
+        return await _get_india_vix()
+    except Exception as e:
+        logger.error(f"India VIX fetch failed: {e}")
+        from fastapi import HTTPException
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.get("/price")

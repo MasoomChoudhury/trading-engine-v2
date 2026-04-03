@@ -1,6 +1,7 @@
-from fastapi import APIRouter, BackgroundTasks, HTTPException
+from fastapi import APIRouter, BackgroundTasks, HTTPException, Query
 from loguru import logger
-from app.services.breadth_service import build_breadth_analytics, refresh_all_constituents, load_constituents
+from app.services.breadth_service import build_breadth_analytics, refresh_all_constituents, load_constituents, compute_advance_decline
+from app.services.sector_rs_service import get_sector_rs
 
 router = APIRouter(prefix="/api/v1/breadth", tags=["Breadth"])
 
@@ -42,6 +43,33 @@ async def refresh_breadth_data(background_tasks: BackgroundTasks):
 
     background_tasks.add_task(_run)
     return {"status": "started", "message": "Fetching candles for all 50 constituents — check /analytics in ~30s"}
+
+
+@router.get("/advance-decline")
+async def get_advance_decline(days: int = Query(default=30, ge=5, le=90)):
+    """
+    Nifty 50 Advance-Decline ratio for last N trading days.
+    Returns per-day advances/declines, A-D ratio, cumulative A-D line, breadth%.
+    """
+    try:
+        return await compute_advance_decline(days=days)
+    except Exception as e:
+        logger.error(f"Advance-decline failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/sector-rs")
+async def get_sector_rs_route(days: int = Query(default=60, ge=10, le=252)):
+    """
+    FinNifty and Nifty IT relative strength vs Nifty 50.
+    RS normalised to 100 at the start of the window.
+    RS > 100 = sector outperformed Nifty since base date.
+    """
+    try:
+        return await get_sector_rs(days=days)
+    except Exception as e:
+        logger.error(f"Sector RS failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
 
 
 @router.get("/config")

@@ -65,7 +65,9 @@ class SupertrendResult:
 
 @dataclass
 class StochRSIResult:
-    value: float
+    k: float   # %K (smoothed stochastic of RSI)
+    d: float   # %D (signal = SMA of %K)
+    value: float = 0.0  # kept for backward compat — same as d
 
 
 @dataclass
@@ -115,7 +117,7 @@ class AllIndicators:
                 "bandwidth": self.bollinger.bandwidth,
             },
             "supertrend": {"value": self.supertrend.value, "direction": self.supertrend.direction},
-            "stoch_rsi": {"value": self.stoch_rsi.value},
+            "stoch_rsi": {"k": self.stoch_rsi.k, "d": self.stoch_rsi.d, "value": self.stoch_rsi.d},
             "adx": {"adx": self.adx.adx, "plus_di": self.adx.plus_di, "minus_di": self.adx.minus_di},
             "atr": {"value": self.atr.value},
             "vwap": {"value": self.vwap.value},
@@ -251,12 +253,14 @@ def calculate_stoch_rsi(prices: pd.Series, rsi_period: int = 14, stoch_period: i
     max_rsi = rsi.rolling(window=stoch_period).max()
 
     stoch_rsi = 100 * (rsi - min_rsi) / (max_rsi - min_rsi)
-    # Smooth with SMA of %K
+    # %K = SMA(stoch_rsi, k)
     k_smooth = stoch_rsi.rolling(window=k).mean()
-    # %D = SMA of %K
+    # %D = SMA(%K, d)
     d_smooth = k_smooth.rolling(window=d).mean()
 
-    return StochRSIResult(value=float(d_smooth.iloc[-1]) if not pd.isna(d_smooth.iloc[-1]) else 50.0)
+    k_val = float(k_smooth.iloc[-1]) if not pd.isna(k_smooth.iloc[-1]) else 50.0
+    d_val = float(d_smooth.iloc[-1]) if not pd.isna(d_smooth.iloc[-1]) else 50.0
+    return StochRSIResult(k=k_val, d=d_val, value=d_val)
 
 
 def calculate_adx(high: pd.Series, low: pd.Series, close: pd.Series, period: int = 14) -> ADXResult:
@@ -319,6 +323,7 @@ def calculate_all_indicators(candle_data: list[list]) -> AllIndicators:
     low = df["low"]
     volume = df["volume"]
 
+    stoch = calculate_stoch_rsi(close)
     return AllIndicators(
         rsi=RSIResult(value=calculate_rsi(close, 14)),
         ema=calculate_ema(close),
@@ -326,7 +331,7 @@ def calculate_all_indicators(candle_data: list[list]) -> AllIndicators:
         macd=calculate_macd(close),
         bollinger=calculate_bollinger(close),
         supertrend=calculate_supertrend(high, low, close),
-        stoch_rsi=calculate_stoch_rsi(close),
+        stoch_rsi=stoch,
         adx=calculate_adx(high, low, close),
         atr=calculate_atr(high, low, close),
         vwap=calculate_vwap(high, low, close, volume),

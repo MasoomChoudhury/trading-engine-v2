@@ -44,7 +44,7 @@ class GEXResponse(BaseModel):
     net_gex: float
     regime: str
     regime_description: str
-    zero_gamma_level: float
+    zero_gamma_level: float | None = None
     call_wall: float
     put_wall: float
     pcr: float

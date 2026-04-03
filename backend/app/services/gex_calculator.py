@@ -97,23 +97,25 @@ def _calculate_zero_gamma_level(sorted_strikes: list[StrikeGEX], cumulative: lis
     return None
 
 
-async def calculate_gex(expiry_date: str, lot_size: int = 50) -> GEXResult:
+async def calculate_gex(
+    expiry_date: str,
+    lot_size: int = 50,
+    instrument_key: str = "NSE_INDEX|Nifty 50",
+) -> GEXResult:
     """
-    Calculate Net GEX for Nifty 50 from the Upstox option chain.
+    Calculate Net GEX for a Nifty-family index from the Upstox option chain.
 
     GEX Formula:
       Call GEX = Call_OI × Call_Gamma × Lot_Size × Spot × 0.01
       Put GEX  = Put_OI  × Put_Gamma  × Lot_Size × Spot × 0.01
       Net GEX  = Call GEX - Put GEX
-      Total GEX = Σ Net GEX (summed across all strikes)
+      Total GEX = Call GEX + Put GEX (gross sum, always positive)
 
     Fallback: When gamma = 0 but delta is available, use delta-based GEX:
       GEX ≈ OI × |delta| × Lot_Size × Spot × 0.01
     This is a standard industry approximation when direct gamma data is unavailable.
     """
     from datetime import datetime, timezone
-
-    instrument_key = "NSE_INDEX|Nifty 50"
     logger.info(f"Fetching option chain for {instrument_key}, expiry: {expiry_date}")
 
     chain_data = await upstox_client.get_option_chain(instrument_key, expiry_date)
@@ -226,7 +228,8 @@ async def calculate_gex(expiry_date: str, lot_size: int = 50) -> GEXResult:
     total_call_gex_sum = sum(s.call_gamma_exposure for s in sorted_strikes)
     total_put_gex_sum = sum(s.put_gamma_exposure for s in sorted_strikes)
     net_gex = total_call_gex_sum - total_put_gex_sum
-    total_gex = sum(s.net_gex for s in sorted_strikes)
+    # Total GEX = gross absolute exposure (call + put sides, always positive)
+    total_gex = total_call_gex_sum + total_put_gex_sum
 
     # Cumulative net GEX for zero gamma level
     cumulative = []
@@ -248,7 +251,7 @@ async def calculate_gex(expiry_date: str, lot_size: int = 50) -> GEXResult:
     pcr_volume = total_put_vol / total_call_vol if total_call_vol > 0 else pcr_oi
 
     # Regime determination
-    if total_gex > 0:
+    if net_gex > 0:
         regime = "positive_gex"
         regime_desc = "Market makers dampen volatility — expect range-bound behavior (buy dips, sell rallies)"
     else:

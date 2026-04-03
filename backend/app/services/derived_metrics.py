@@ -131,10 +131,10 @@ def _calculate_cpr(ohlc_df: pd.DataFrame) -> tuple[Optional[float], Optional[flo
 
     pivot = (high + low + close) / 3
     bc = (high + low) / 2
-    tc = (pivot + bc) / 2
+    tc = (2 * pivot) - bc  # correct CPR top: mirror of BC around pivot
 
-    # CPR width as % of pivot
-    cpr_width = abs(tc - bc) / pivot * 100 if pivot > 0 else 0
+    # CPR width in points (then rounded to 2 decimals)
+    cpr_width = round(abs(tc - bc), 2)
 
     return pivot, bc, tc, "", cpr_width
 

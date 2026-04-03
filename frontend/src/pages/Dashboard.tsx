@@ -3,8 +3,10 @@ import IndicatorCard from '../components/IndicatorCard';
 import GEXPanel from '../components/GEXPanel';
 import DerivedMetrics from '../components/DerivedMetrics';
 import MarketStatusBanner from '../components/MarketStatusBanner';
-import { useIndicators } from '../hooks/useIndicators';
-import { Loader2 } from 'lucide-react';
+import IndiaVIXPanel from '../components/IndiaVIXPanel';
+import GlobalCuesPanel from '../components/GlobalCuesPanel';
+import { useIndicators, useMarketDepth } from '../hooks/useIndicators';
+import { Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 
 function interpretRSI(value: number): 'bullish' | 'bearish' | 'neutral' {
   if (value > 70) return 'bearish';
@@ -22,6 +24,85 @@ function interpretADX(adx: number, plusDI: number, minusDI: number): 'bullish' |
   if (adx < 20) return 'neutral';
   if (plusDI > minusDI) return 'bullish';
   return 'bearish';
+}
+
+// ── Panel 9: Market Depth ─────────────────────────────────────────────────────
+
+function MarketDepthPanel() {
+  const { data, isLoading } = useMarketDepth();
+
+  if (isLoading || !data) return (
+    <div className="panel-card h-40 flex items-center justify-center text-slate-500 text-sm animate-pulse">
+      Loading depth…
+    </div>
+  );
+
+  const { bids, asks, buy_pressure_pct, bid_ask_ratio, spread, spread_pct, ltp } = data;
+
+  const pressureColor = buy_pressure_pct >= 55 ? 'text-emerald-400' : buy_pressure_pct <= 45 ? 'text-red-400' : 'text-slate-300';
+
+  return (
+    <div className="panel-card">
+      <div className="flex items-center justify-between mb-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-200">Market Depth — Level 2</h3>
+          <p className="text-xs text-slate-500 mt-0.5">LTP ₹{ltp?.toLocaleString('en-IN')}{spread_pct != null && ` · Spread ${spread_pct.toFixed(4)}%`}</p>
+        </div>
+        <div className={`text-sm font-bold ${pressureColor} flex items-center gap-1`}>
+          {buy_pressure_pct >= 50 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
+          {buy_pressure_pct?.toFixed(1)}% buy pressure
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        {/* Bids */}
+        <div>
+          <div className="text-xs font-medium text-emerald-400 mb-1.5 text-center">BID (Buy)</div>
+          <table className="w-full text-xs">
+            <thead><tr className="text-slate-500"><th className="text-right pr-2">Price</th><th className="text-right">Qty</th></tr></thead>
+            <tbody>
+              {bids.map((b, i) => (
+                <tr key={i} className="text-emerald-300">
+                  <td className="text-right pr-2 font-mono py-0.5">₹{b.price.toLocaleString('en-IN')}</td>
+                  <td className="text-right font-mono">{b.quantity.toLocaleString('en-IN')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        {/* Asks */}
+        <div>
+          <div className="text-xs font-medium text-red-400 mb-1.5 text-center">ASK (Sell)</div>
+          <table className="w-full text-xs">
+            <thead><tr className="text-slate-500"><th className="text-right pr-2">Price</th><th className="text-right">Qty</th></tr></thead>
+            <tbody>
+              {asks.map((a, i) => (
+                <tr key={i} className="text-red-300">
+                  <td className="text-right pr-2 font-mono py-0.5">₹{a.price.toLocaleString('en-IN')}</td>
+                  <td className="text-right font-mono">{a.quantity.toLocaleString('en-IN')}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {/* Pressure bar */}
+      <div className="mt-3">
+        <div className="flex justify-between text-xs text-slate-500 mb-1">
+          <span>Bid {data.total_bid_qty.toLocaleString('en-IN')}</span>
+          <span>Ask {data.total_ask_qty.toLocaleString('en-IN')}</span>
+        </div>
+        <div className="h-2 rounded-full bg-slate-700 overflow-hidden">
+          <div
+            className="h-full bg-gradient-to-r from-emerald-500 to-emerald-400 transition-all duration-300"
+            style={{ width: `${buy_pressure_pct}%` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function BollingerDisplay({ ind }: { ind: Record<string, any> }) {
@@ -76,9 +157,11 @@ export default function Dashboard() {
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto page-enter">
+      <GlobalCuesPanel />
       <LivePrice />
       <MarketStatusBanner />
       <GEXPanel />
+      <IndiaVIXPanel />
 
       <div className="bg-slate-900 rounded-xl p-6 ring-1 ring-white/[0.06] shadow-lg shadow-black/20">
         <h2 className="text-lg font-semibold text-slate-200 mb-4 tracking-tight">Technical Indicators</h2>
@@ -171,6 +254,9 @@ export default function Dashboard() {
       </div>
 
       <DerivedMetrics />
+
+      {/* Panel 9: Market Depth */}
+      <MarketDepthPanel />
     </div>
   );
 }

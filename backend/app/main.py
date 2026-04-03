@@ -18,7 +18,7 @@ logger.add(
 # Import routes after logger is configured
 from app.api.middleware import log_api_call
 from app.services.upstox_client import upstox_client
-from app.api.routes import nifty50, logs, admin, websocket, auth, webhook, futures, options, breadth
+from app.api.routes import nifty50, logs, admin, websocket, auth, webhook, futures, options, breadth, macro, banknifty
 
 
 @asynccontextmanager
@@ -28,6 +28,35 @@ async def lifespan(app: FastAPI):
 
     # Wire up API logger to Upstox client
     upstox_client.set_api_logger(log_api_call)
+
+    # Ensure macro_events table exists and seed it
+    try:
+        from app.services.macro_service import ensure_macro_table, seed_macro_events
+        await ensure_macro_table()
+        await seed_macro_events()
+    except Exception as e:
+        logger.warning(f"Macro calendar setup failed (non-critical): {e}")
+
+    # Ensure FII data table exists
+    try:
+        from app.services.fii_service import ensure_fii_table
+        await ensure_fii_table()
+    except Exception as e:
+        logger.warning(f"FII table setup failed (non-critical): {e}")
+
+    # Ensure FII derivatives table exists
+    try:
+        from app.services.fii_deriv_service import ensure_fii_deriv_table
+        await ensure_fii_deriv_table()
+    except Exception as e:
+        logger.warning(f"FII deriv table setup failed (non-critical): {e}")
+
+    # Ensure straddle snapshots table exists
+    try:
+        from app.services.intraday_momentum_service import ensure_straddle_table
+        await ensure_straddle_table()
+    except Exception as e:
+        logger.warning(f"Straddle table setup failed (non-critical): {e}")
 
     # Start background scheduler
     try:
@@ -76,6 +105,8 @@ app.include_router(webhook.router)
 app.include_router(futures.router)
 app.include_router(options.router)
 app.include_router(breadth.router)
+app.include_router(macro.router)
+app.include_router(banknifty.router)
 
 
 @app.get("/")

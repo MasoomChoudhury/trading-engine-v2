@@ -375,5 +375,542 @@ export interface BreadthAnalytics {
 export const getBreadthAnalytics = () =>
   fetcher<BreadthAnalytics>('/v1/breadth/analytics');
 
+// ─── Sector Relative Strength ─────────────────────────────────────────────────
+export type RsSignal = 'outperforming' | 'fading_leader' | 'underperforming' | 'recovering' | 'neutral';
+
+export interface SectorRsPoint {
+  date: string;
+  nifty50: number;
+  financials_wap: number;
+  it_wap: number;
+  financials_rs: number;
+  it_rs: number;
+}
+
+export interface SectorRsCurrent {
+  date: string;
+  nifty50: number;
+  financials_wap: number;
+  it_wap: number;
+  financials_rs: number;
+  it_rs: number;
+  financials_5d_slope: number;
+  it_5d_slope: number;
+  nifty_today_pct: number;
+  fin_today_pct: number;
+  it_today_pct: number;
+  fin_rel_today: number;
+  it_rel_today: number;
+  financials_signal: RsSignal;
+  it_signal: RsSignal;
+}
+
+export interface SectorRS {
+  days: number;
+  base_date: string;
+  series: SectorRsPoint[];
+  current: SectorRsCurrent;
+  market_note: string;
+  timestamp: string;
+  error?: string;
+}
+
+export const getSectorRS = (days = 60) =>
+  fetcher<SectorRS>(`/v1/breadth/sector-rs?days=${days}`);
+
 export const triggerBreadthRefresh = () =>
   fetcher<{ status: string; message: string }>('/v1/breadth/refresh', { method: 'POST' });
+
+// ─── Macro Calendar ──────────────────────────────────────────────────────────
+export interface MacroEvent {
+  id: number;
+  event_date: string;
+  event_type: 'rbi_mpc' | 'fomc' | 'us_cpi' | 'earnings' | 'custom';
+  title: string;
+  description: string;
+  is_approximate: boolean;
+  days_to_event: number;
+  is_past: boolean;
+  is_today: boolean;
+}
+
+export interface MacroCalendar {
+  today: MacroEvent[];
+  upcoming: MacroEvent[];
+  past: MacroEvent[];
+  next_event: MacroEvent | null;
+  total: number;
+}
+
+export const getMacroCalendar = (days_back = 14, days_forward = 90) =>
+  fetcher<MacroCalendar>(`/v1/macro/events?days_back=${days_back}&days_forward=${days_forward}`);
+
+export const addMacroEvent = (body: {
+  event_date: string; event_type: string; title: string;
+  description?: string; is_approximate?: boolean;
+}) => fetcher<{ id: number }>('/v1/macro/events', { method: 'POST', body: JSON.stringify(body) });
+
+// ─── BankNifty Analytics ─────────────────────────────────────────────────────
+export interface BankNiftyStrikeBar {
+  strike: number;
+  call_gex: number;
+  put_gex: number;
+  net_gex: number;
+}
+
+export interface BankNiftyAnalytics {
+  timestamp: string;
+  expiry_date: string;
+  spot_price: number;
+  lot_size: number;
+  total_gex: number;
+  net_gex: number;
+  regime: string;
+  regime_description: string;
+  commentary: string;
+  zero_gamma_level: number;
+  zero_gamma_pct: number;
+  call_wall: number;
+  call_wall_pct: number;
+  put_wall: number;
+  put_wall_pct: number;
+  pcr_oi: number;
+  pcr_volume: number;
+  above_zero_gamma: boolean;
+  strike_chart: BankNiftyStrikeBar[];
+}
+
+export const getBankNiftyAnalytics = () =>
+  fetcher<BankNiftyAnalytics>('/v1/banknifty/analytics');
+
+// ─── GEX History ─────────────────────────────────────────────────────────────
+export interface GEXHistoryRow {
+  date: string;
+  total_gex: number | null;
+  net_gex: number | null;
+  spot_price: number | null;
+  zero_gamma_level: number | null;
+}
+
+export interface GEXHistory {
+  history: GEXHistoryRow[];
+  current_gex: number | null;
+  percentile_rank: number | null;
+  percentile_label: string | null;
+  days: number;
+  data_points: number;
+}
+
+export const getGEXHistory = (days = 90) =>
+  fetcher<GEXHistory>(`/v1/nifty50/gex-history?days=${days}`);
+
+// ─── IV Skew ──────────────────────────────────────────────────────────────────
+export interface IVSmilePoint {
+  strike: number;
+  call_iv: number | null;
+  put_iv: number | null;
+  call_delta: number;
+  put_delta: number;
+}
+
+export interface IVSkew {
+  timestamp: string;
+  expiry_date: string;
+  spot_price: number;
+  smile: IVSmilePoint[];
+  atm_iv: number | null;
+  call_25d_iv: number | null;
+  put_25d_iv: number | null;
+  call_10d_iv: number | null;
+  put_10d_iv: number | null;
+  rr25: number | null;
+  fly25: number | null;
+  rr10: number | null;
+  skew_direction: 'put_skew' | 'call_skew' | 'neutral';
+  skew_note: string;
+}
+
+export const getIVSkew = (expiry?: string) =>
+  fetcher<IVSkew>(`/v1/options/iv-skew${expiry ? `?expiry=${expiry}` : ''}`);
+
+// ─── OI Trend ─────────────────────────────────────────────────────────────────
+export interface OITrendStrike {
+  strike: number;
+  is_atm: boolean;
+  ce_oi: number[];
+  pe_oi: number[];
+  ce_change: number;
+  pe_change: number;
+  ce_status: 'build' | 'unwind' | 'flat' | 'no_data';
+  pe_status: 'build' | 'unwind' | 'flat' | 'no_data';
+}
+
+export interface OITrend {
+  expiry: string;
+  spot_price: number;
+  atm_strike: number;
+  dates: string[];
+  series: OITrendStrike[];
+}
+
+export const getOITrend = (expiry?: string, days = 10) =>
+  fetcher<OITrend>(`/v1/options/oi-trend?days=${days}${expiry ? `&expiry=${expiry}` : ''}`);
+
+// ─── Option Greeks / Buyer's Toolkit ─────────────────────────────────────────
+export type EdgeLabel = 'strong' | 'edge' | 'tight' | 'no_edge' | 'no_data';
+
+export interface ChainGreeksRow {
+  strike: number;
+  is_atm: boolean;
+  ce_ltp: number;
+  pe_ltp: number;
+  ce_volume: number;
+  pe_volume: number;
+  ce_oi: number;
+  pe_oi: number;
+  ce_iv: number | null;
+  pe_iv: number | null;
+  ce_delta: number | null;
+  pe_delta: number | null;
+  ce_theta: number | null;
+  pe_theta: number | null;
+  ce_vega: number | null;
+  pe_vega: number | null;
+  ce_gamma: number | null;
+  pe_gamma: number | null;
+  ce_buyers_edge: number | null;
+  pe_buyers_edge: number | null;
+  ce_edge_label: EdgeLabel;
+  pe_edge_label: EdgeLabel;
+}
+
+export interface DteCurvePoint {
+  dte: number;
+  theta_per_day: number;
+  is_current: boolean;
+  zone: 'danger' | 'warning' | 'caution' | 'normal';
+}
+
+export interface AtmSummary {
+  strike: number;
+  ce_ltp: number | null;
+  pe_ltp: number | null;
+  ce_iv: number | null;
+  pe_iv: number | null;
+  ce_delta: number | null;
+  pe_delta: number | null;
+  ce_theta: number | null;
+  pe_theta: number | null;
+  ce_vega: number | null;
+  pe_vega: number | null;
+  ce_buyers_edge: number | null;
+  pe_buyers_edge: number | null;
+  ce_edge_label: EdgeLabel;
+  pe_edge_label: EdgeLabel;
+}
+
+export interface BuyersEdgeData {
+  expiry: string;
+  spot: number;
+  atm_strike: number;
+  dte: number;
+  dte_note: string;
+  atr_14: number | null;
+  atm: AtmSummary | null;
+  chain: ChainGreeksRow[];
+  decay_curve: DteCurvePoint[];
+  timestamp: string;
+}
+
+export const getBuyersEdge = (expiry?: string) =>
+  fetcher<BuyersEdgeData>(`/v1/options/buyers-edge${expiry ? `?expiry=${expiry}` : ''}`);
+
+// ─── Intraday Momentum Proxies ────────────────────────────────────────────────
+export interface VolIndicatorPoint {
+  timestamp: string;
+  close: number;
+  volume: number;
+  vrsi: number | null;
+  vwmacd: number | null;
+  vwmacd_signal: number | null;
+  vwmacd_hist: number | null;
+}
+
+export type VolSignal =
+  | 'bullish_confirmed' | 'bullish_unconfirmed'
+  | 'bearish_confirmed' | 'bearish_unconfirmed'
+  | 'neutral' | 'mixed' | 'no_data' | 'insufficient_data';
+
+export interface VolIndicators {
+  series: VolIndicatorPoint[];
+  interval: string;
+  current: VolIndicatorPoint | null;
+  signal: VolSignal;
+  price_only_mode?: boolean;
+  price_only_note?: string | null;
+  timestamp: string;
+}
+
+export interface StraddlePoint {
+  timestamp: string;
+  spot: number | null;
+  atm_strike: number | null;
+  ce_ltp: number | null;
+  pe_ltp: number | null;
+  straddle_price: number | null;
+  atm_iv: number | null;
+}
+
+export interface StraddleIntraday {
+  snapshots: StraddlePoint[];
+  count: number;
+  decay_signal: 'iv_crush_warning' | 'iv_expansion' | 'normal' | 'no_data';
+  note: string;
+  timestamp: string;
+}
+
+export type PcrBias = 'bullish' | 'bearish' | 'neutral';
+export type PcrDivergenceSignal =
+  | 'counter_trend_bounce' | 'short_term_pullback'
+  | 'aligned_bullish' | 'aligned_bearish' | 'neutral';
+
+export interface PcrDivergence {
+  near_expiry: string;
+  monthly_expiry: string;
+  near_pcr_oi: number;
+  near_pcr_vol: number;
+  near_bias: PcrBias;
+  monthly_pcr_oi: number;
+  monthly_pcr_vol: number;
+  monthly_bias: PcrBias;
+  divergence: boolean;
+  signal: PcrDivergenceSignal;
+  note: string;
+  timestamp: string;
+}
+
+export const getVolIndicators = (interval = '5min', limit = 100) =>
+  fetcher<VolIndicators>(`/v1/options/vol-indicators?interval=${interval}&limit=${limit}`);
+
+export const getStraddleIntraday = () =>
+  fetcher<StraddleIntraday>('/v1/options/straddle-intraday');
+
+export const getPcrDivergence = () =>
+  fetcher<PcrDivergence>('/v1/options/pcr-divergence');
+
+// ─── FII/DII Flows ───────────────────────────────────────────────────────────
+export interface FIIFlowDay {
+  date: string;
+  fii_buy: number;
+  fii_sell: number;
+  fii_net: number;
+  dii_buy: number;
+  dii_sell: number;
+  dii_net: number;
+  combined_net: number;
+  cum_fii: number;
+  cum_dii: number;
+}
+
+export interface FIIFlows {
+  series: FIIFlowDay[];
+  latest_date: string | null;
+  latest_fii_net: number | null;
+  latest_dii_net: number | null;
+  fii_5d_net: number | null;
+  dii_5d_net: number | null;
+  fii_trend: 'buying' | 'selling';
+  dii_trend: 'buying' | 'selling';
+  data_points: number;
+  unit: string;
+  note: string;
+}
+
+export const getFIIFlows = (days = 30, refresh = false) =>
+  fetcher<FIIFlows>(`/v1/macro/fii-flows?days=${days}${refresh ? '&refresh=true' : ''}`);
+
+// ─── Advance-Decline ──────────────────────────────────────────────────────────
+export interface ADRow {
+  date: string;
+  advances: number;
+  declines: number;
+  unchanged: number;
+  total: number;
+  a_d_ratio: number;
+  breadth_pct: number;
+  breadth_ma5: number;
+  cum_ad_line: number;
+}
+
+export interface AdvanceDecline {
+  series: ADRow[];
+  latest: ADRow | Record<string, never>;
+  avg_breadth_5d: number | null;
+  trend: 'improving' | 'deteriorating' | 'stable';
+  data_points: number;
+  constituents_tracked: number;
+}
+
+export const getAdvanceDecline = (days = 30) =>
+  fetcher<AdvanceDecline>(`/v1/breadth/advance-decline?days=${days}`);
+
+// ─── Market Depth ─────────────────────────────────────────────────────────────
+export interface DepthLevel {
+  price: number;
+  quantity: number;
+  orders: number;
+}
+
+export interface MarketDepth {
+  timestamp: string;
+  symbol: string;
+  ltp: number;
+  bids: DepthLevel[];
+  asks: DepthLevel[];
+  total_bid_qty: number;
+  total_ask_qty: number;
+  bid_ask_ratio: number;
+  buy_pressure_pct: number;
+  spread: number | null;
+  spread_pct: number | null;
+}
+
+export const getMarketDepth = () =>
+  fetcher<MarketDepth>('/v1/nifty50/depth');
+
+// ─── India VIX ────────────────────────────────────────────────────────────────
+export interface IndiaVIX {
+  vix: number;
+  vix_prev_close: number;
+  vix_change: number;
+  vix_change_pct: number;
+  vix_high: number;
+  vix_low: number;
+  vix_52w_high: number;
+  vix_52w_low: number;
+  vix_1w_ago: number | null;
+  vix_1m_ago: number | null;
+  vix_percentile: number;
+  regime: 'extreme_fear' | 'fear' | 'caution' | 'calm';
+  regime_note: string;
+  hv20: number | null;
+  iv_rv_ratio: number | null;
+  timestamp: string;
+}
+export const getIndiaVIX = () => fetcher<IndiaVIX>('/v1/nifty50/vix');
+
+// ─── Global Cues ──────────────────────────────────────────────────────────────
+export interface GlobalCueItem {
+  price: number | null;
+  prev_close: number | null;
+  change: number | null;
+  change_pct: number | null;
+  high: number | null;
+  low: number | null;
+  name: string;
+}
+
+export interface UsdInrTrend {
+  trend: 'depreciating' | 'appreciating' | 'sideways' | 'unknown';
+  severity?: string;
+  intraday_chg_pct: number | null;
+  open?: number;
+  current?: number;
+  slope_per_candle?: number;
+  candles?: number;
+  note?: string;
+}
+
+export interface EmHeadwind {
+  signal: 'strong_headwind' | 'headwind' | 'neutral' | 'mild_tailwind' | 'tailwind';
+  score: number;
+  reasons: string[];
+}
+
+export interface GlobalCues {
+  dow: GlobalCueItem;
+  nasdaq: GlobalCueItem;
+  sp500: GlobalCueItem;
+  nikkei: GlobalCueItem;
+  hang_seng: GlobalCueItem;
+  usd_inr: GlobalCueItem;
+  dxy: GlobalCueItem;
+  us10y: GlobalCueItem;
+  usd_inr_trend: UsdInrTrend;
+  em_headwind: EmHeadwind;
+  gift_nifty: { price: null; note: string };
+  sentiment: 'bullish' | 'bearish' | 'mixed';
+  timestamp: string;
+}
+export const getGlobalCues = () => fetcher<GlobalCues>('/v1/macro/global-cues');
+
+// ─── Pre-market Bias ──────────────────────────────────────────────────────────
+export type BiasSignalSentiment = 'bullish' | 'mild_bullish' | 'neutral' | 'mild_bearish' | 'bearish';
+
+export interface BiasSignal {
+  key: string;
+  label: string;
+  value: string;
+  sentiment: BiasSignalSentiment;
+  note: string;
+}
+
+export interface GiftNiftyProxy {
+  ltp: number | null;
+  prev_close: number | null;
+  spot: number | null;
+  gap_pct: number | null;
+  basis_pct: number | null;
+  expiry: string;
+  note: string;
+}
+
+export interface PreMarketBias {
+  bias: 'strong_bullish' | 'bullish' | 'neutral' | 'bearish' | 'strong_bearish';
+  score: number;
+  signals: BiasSignal[];
+  global_cues: GlobalCues;
+  gift_nifty: GiftNiftyProxy;
+  fii_cash: {
+    fii_net: number | null;
+    dii_net: number | null;
+    combined_net: number | null;
+    date: string | null;
+    fii_5d_net: number | null;
+    fii_trend: string | null;
+  };
+  fii_deriv: {
+    index_fut_net: number | null;
+    total_options_net: number | null;
+    net_position: 'net_long' | 'net_short' | 'unknown';
+    date: string | null;
+  };
+  timestamp: string;
+}
+
+export const getPreMarketBias = () => fetcher<PreMarketBias>('/v1/macro/premarket-bias');
+
+// ─── FII Derivatives ──────────────────────────────────────────────────────────
+export interface FIIDerivRow {
+  trade_date: string;
+  future_index_long: number;
+  future_index_short: number;
+  future_index_net: number;
+  option_index_calls_long: number;
+  option_index_calls_short: number;
+  option_index_puts_long: number;
+  option_index_puts_short: number;
+}
+export interface FIIDerivatives {
+  series: FIIDerivRow[];
+  latest: FIIDerivRow | null;
+  net_position: 'net_long' | 'net_short' | 'unknown';
+  latest_date: string | null;
+  index_fut_net: number | null;
+  total_options_net: number | null;
+  note: string;
+}
+export const getFIIDerivatives = (days = 20) =>
+  fetcher<FIIDerivatives>(`/v1/macro/fii-derivatives?days=${days}`);
+export const refreshFIIDerivatives = () =>
+  fetcher<FIIDerivatives>('/v1/macro/fii-derivatives/refresh', { method: 'POST' });

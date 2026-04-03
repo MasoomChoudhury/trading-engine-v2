@@ -132,3 +132,22 @@ class UpstoxToken(Base):
     expires_at = Column(DateTime(timezone=True))
     issued_at = Column(DateTime(timezone=True))
     received_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
+
+
+class StraddleSnapshot(Base):
+    """Intraday ATM straddle price snapshots (saved every 5 minutes by scheduler)."""
+    __tablename__ = "straddle_snapshots"
+    __table_args__ = (
+        PrimaryKeyConstraint("timestamp"),
+    )
+
+    timestamp = Column(DateTime(timezone=True), primary_key=True)
+    expiry = Column(String, nullable=False)
+    spot = Column(Numeric)
+    atm_strike = Column(Numeric)
+    ce_ltp = Column(Numeric)
+    pe_ltp = Column(Numeric)
+    straddle_price = Column(Numeric)
+    ce_iv = Column(Numeric)
+    pe_iv = Column(Numeric)
+    atm_iv = Column(Numeric)

@@ -1,5 +1,5 @@
 import { BrowserRouter, Routes, Route, Link, useLocation } from 'react-router-dom';
-import { LayoutDashboard, ScrollText, TrendingUp, RefreshCw, KeyRound, BarChart3, Layers, Activity } from 'lucide-react';
+import { LayoutDashboard, ScrollText, TrendingUp, RefreshCw, KeyRound, BarChart3, Layers, Activity, CalendarDays, Landmark, TrendingUpDown } from 'lucide-react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import Dashboard from './pages/Dashboard';
 import APILogs from './pages/APILogs';
@@ -7,6 +7,8 @@ import Indicators from './pages/Indicators';
 import Futures from './pages/Futures';
 import Options from './pages/Options';
 import Breadth from './pages/Breadth';
+import Macro from './pages/Macro';
+import BankNifty from './pages/BankNifty';
 import { DashboardProvider } from './context/DashboardContext';
 import { useState, useCallback } from 'react';
 import { triggerRefresh, requestToken } from './lib/api';
@@ -46,46 +48,62 @@ function NavBar() {
   const navItems = [
     { to: '/', icon: LayoutDashboard, label: 'Dashboard' },
     { to: '/indicators', icon: TrendingUp, label: 'Indicators' },
-    { to: '/futures', icon: BarChart3, label: 'Futures Volume' },
-    { to: '/options', icon: Layers, label: 'Options OI' },
+    { to: '/futures', icon: BarChart3, label: 'Futures' },
+    { to: '/options', icon: Layers, label: 'Options' },
     { to: '/breadth', icon: Activity, label: 'Breadth' },
-    { to: '/logs', icon: ScrollText, label: 'API Logs' },
+    { to: '/banknifty', icon: Landmark, label: 'BankNifty' },
+    { to: '/macro', icon: CalendarDays, label: 'Macro' },
+    { to: '/logs', icon: ScrollText, label: 'Logs' },
   ];
 
   return (
-    <nav className="bg-slate-900/80 backdrop-blur-sm border-b border-slate-700/60 px-6 py-3 flex items-center justify-between sticky top-0 z-50">
-      <div className="flex items-center gap-1">
-        <span className="text-xl font-bold mr-8 tracking-tight bg-gradient-to-r from-blue-400 to-cyan-400 bg-clip-text text-transparent">Nifty50 Analytics</span>
-        {navItems.map(({ to, icon: Icon, label }) => (
-          <Link
-            key={to}
-            to={to}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-[background-color,transform,box-shadow] duration-150 active:scale-[0.97] ${location.pathname === to
-                ? 'bg-blue-600 text-white shadow-sm shadow-blue-500/30'
-                : 'text-slate-400 hover:text-white hover:bg-slate-800/80'
+    <nav className="bg-slate-900/80 backdrop-blur-sm border-b border-slate-700/60 px-4 py-2 flex items-center gap-4 sticky top-0 z-50">
+      {/* Logo */}
+      <Link to="/" className="flex items-center justify-center w-8 h-8 rounded-lg bg-gradient-to-br from-blue-500 to-cyan-500 flex-shrink-0" title="Nifty50 Analytics">
+        <TrendingUpDown size={16} className="text-white" />
+      </Link>
+
+      {/* Divider */}
+      <div className="w-px h-5 bg-slate-700/80 flex-shrink-0" />
+
+      {/* Nav links */}
+      <div className="flex items-center gap-0.5 flex-1 min-w-0">
+        {navItems.map(({ to, icon: Icon, label }) => {
+          const active = location.pathname === to;
+          return (
+            <Link
+              key={to}
+              to={to}
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-md text-xs font-medium whitespace-nowrap transition-[background-color,transform] duration-150 active:scale-[0.97] ${
+                active
+                  ? 'bg-blue-600 text-white'
+                  : 'text-slate-400 hover:text-slate-100 hover:bg-slate-800'
               }`}
-          >
-            <Icon size={16} />
-            {label}
-          </Link>
-        ))}
+            >
+              <Icon size={13} />
+              {label}
+            </Link>
+          );
+        })}
       </div>
-      <div className="flex items-center gap-2">
+
+      {/* Action buttons — icon-only with tooltips */}
+      <div className="flex items-center gap-1.5 flex-shrink-0">
         <button
           onClick={handleRequestToken}
           disabled={requestingToken}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-violet-600 hover:bg-violet-500 text-white transition-[background-color,transform,box-shadow] duration-150 active:scale-[0.97] disabled:opacity-50 disabled:pointer-events-none shadow-sm shadow-violet-500/20"
+          title={requestingToken ? 'Requesting token…' : 'Request Token'}
+          className="flex items-center justify-center w-7 h-7 rounded-md bg-violet-600/80 hover:bg-violet-500 text-white transition-[background-color,transform] duration-150 active:scale-[0.97] disabled:opacity-40 disabled:pointer-events-none"
         >
-          <KeyRound size={14} className={requestingToken ? 'animate-pulse' : ''} />
-          {requestingToken ? 'Requesting...' : 'Request Token'}
+          <KeyRound size={13} className={requestingToken ? 'animate-pulse' : ''} />
         </button>
         <button
           onClick={handleRefresh}
           disabled={refreshing}
-          className="flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium bg-emerald-600 hover:bg-emerald-500 text-white transition-[background-color,transform,box-shadow] duration-150 active:scale-[0.97] disabled:opacity-50 disabled:pointer-events-none shadow-sm shadow-emerald-500/20"
+          title={refreshing ? 'Refreshing…' : 'Refresh Data'}
+          className="flex items-center justify-center w-7 h-7 rounded-md bg-emerald-600/80 hover:bg-emerald-500 text-white transition-[background-color,transform] duration-150 active:scale-[0.97] disabled:opacity-40 disabled:pointer-events-none"
         >
-          <RefreshCw size={14} className={refreshing ? 'animate-spin' : ''} />
-          {refreshing ? 'Refreshing...' : 'Refresh Data'}
+          <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
         </button>
       </div>
     </nav>
@@ -105,6 +123,8 @@ export default function App() {
               <Route path="/futures" element={<Futures />} />
               <Route path="/options" element={<Options />} />
               <Route path="/breadth" element={<Breadth />} />
+              <Route path="/banknifty" element={<BankNifty />} />
+              <Route path="/macro" element={<Macro />} />
               <Route path="/logs" element={<APILogs />} />
             </Routes>
           </div>

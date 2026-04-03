@@ -221,7 +221,30 @@ async def _do_refresh():
     except Exception as e:
         logger.warning(f"Derived metrics failed: {e}")
 
+    # Straddle intraday snapshot
+    try:
+        from app.services.intraday_momentum_service import save_straddle_snapshot
+        await save_straddle_snapshot()
+    except Exception as e:
+        logger.warning(f"Straddle snapshot failed: {e}")
+
     logger.info("Scheduled refresh completed")
+
+
+async def _daily_token_request_job():
+    """
+    Trigger Upstox token request every night at 9:00 PM IST.
+    Sends a push notification to the user's Upstox app.
+    Once approved, the webhook stores the new token automatically.
+    Tokens expire daily at ~3:30 AM IST, so 9 PM gives a 6-hour window to approve.
+    """
+    try:
+        from app.services.upstox_client import token_manager
+        result = await token_manager.initiate_token_request()
+        logger.info(f"Daily Upstox token request sent — approve on Upstox app. "
+                    f"Auth expires: {result.get('data', {}).get('authorization_expiry', 'unknown')}")
+    except Exception as e:
+        logger.error(f"Daily token request failed: {e}")
 
 
 async def _breadth_refresh_job():
@@ -283,6 +306,16 @@ def start_scheduler():
         name="Nifty50 Constituent Breadth Refresh",
         replace_existing=True,
         misfire_grace_time=300,
+    )
+    # Daily token request: 9:00 PM IST (15:30 UTC) Mon-Fri
+    # Sends push notification to Upstox app — approve to get new token before 3:30 AM expiry
+    scheduler.add_job(
+        _daily_token_request_job,
+        CronTrigger(hour=15, minute=30, day_of_week="mon-fri", timezone="UTC"),  # 9 PM IST
+        id="daily_token_request",
+        name="Daily Upstox Token Request",
+        replace_existing=True,
+        misfire_grace_time=600,
     )
     scheduler.start()
     logger.info("Scheduler started — data refresh every 5 minutes")
