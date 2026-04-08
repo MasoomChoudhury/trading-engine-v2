@@ -1,6 +1,6 @@
 const API_BASE = '/api';
 
-async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
+export async function fetcher<T>(url: string, options?: RequestInit): Promise<T> {
   const res = await fetch(`${API_BASE}${url}`, {
     headers: { 'Content-Type': 'application/json' },
     ...options,
@@ -278,10 +278,21 @@ export interface OiWallRow {
   total_oi: number;
 }
 
+export type OiIntent =
+  | 'fresh_long'
+  | 'fresh_short'
+  | 'short_cover'
+  | 'long_exit'
+  | 'build'
+  | 'unwind'
+  | 'flat';
+
 export interface OiChangeRow {
   strike: number;
   ce_change: number;
   pe_change: number;
+  ce_intent: OiIntent;
+  pe_intent: OiIntent;
 }
 
 export interface OiHeatmap {
@@ -914,3 +925,476 @@ export const getFIIDerivatives = (days = 20) =>
   fetcher<FIIDerivatives>(`/v1/macro/fii-derivatives?days=${days}`);
 export const refreshFIIDerivatives = () =>
   fetcher<FIIDerivatives>('/v1/macro/fii-derivatives/refresh', { method: 'POST' });
+
+// ─── IV Term Structure ────────────────────────────────────────────────────────
+export interface IVTermPoint {
+  expiry: string;
+  dte: number;
+  atm_iv: number;
+  atm_ce_iv: number | null;
+  atm_pe_iv: number | null;
+}
+
+export interface IVTermStructure {
+  timestamp: string;
+  spot_price: number;
+  term_structure: IVTermPoint[];
+  regime: 'contango' | 'backwardation' | 'flat';
+  slope: number;
+  near_iv: number;
+  far_iv: number;
+  near_far_ratio: number | null;
+  weekly_premium_pct: number | null;
+  note: string;
+  error?: string;
+}
+
+export const getIVTermStructure = () =>
+  fetcher<IVTermStructure>('/v1/options/iv-term-structure');
+
+// ─── Dealer Delta Exposure ────────────────────────────────────────────────────
+export interface DealerDeltaStrike {
+  strike: number;
+  ce_oi: number;
+  pe_oi: number;
+  ce_delta: number;
+  pe_delta: number;
+  ce_iv: number | null;
+  pe_iv: number | null;
+  strike_customer_delta: number;
+  gamma_oi_weighted: number;
+}
+
+export interface DealerDeltaExposure {
+  timestamp: string;
+  expiry: string;
+  dte: number;
+  spot_price: number;
+  atm_strike: number;
+  customer_net_delta: number;
+  customer_call_delta: number;
+  customer_put_delta: number;
+  dealer_net_delta: number;
+  dealer_position: 'net_short' | 'net_long' | 'neutral';
+  hedging_note: string;
+  top_gamma_strikes: { strike: number; gamma_oi_weighted: number }[];
+  delta_chart: DealerDeltaStrike[];
+  error?: string;
+}
+
+export const getDealerDeltaExposure = (expiry?: string) =>
+  fetcher<DealerDeltaExposure>(
+    `/v1/options/dealer-delta-exposure${expiry ? `?expiry=${expiry}` : ''}`
+  );
+
+// ─── MTF Confluence Score ─────────────────────────────────────────────────────
+export interface MTFSignalDetail {
+  signal: string;
+  value: number | string | null;
+  score: number;
+}
+
+export interface MTFTimeframe {
+  signals: Record<string, MTFSignalDetail>;
+  bullish_count: number;
+  bearish_count: number;
+  neutral_count: number;
+  total: number;
+}
+
+export type ConfluenceLevel = 'HIGH' | 'MODERATE' | 'MIXED' | 'OPPOSING' | 'INVERSE';
+
+export interface MTFConfluence {
+  timestamp: string;
+  spot_price: number | null;
+  score: number;
+  bias: string;
+  confluence_level: ConfluenceLevel;
+  recommendation: string;
+  timeframes: {
+    '5min': MTFTimeframe;
+    '1day': MTFTimeframe;
+  };
+  summary: {
+    bullish_5min: number;
+    bearish_5min: number;
+    bullish_1day: number;
+    bearish_1day: number;
+    direction_5min: string;
+    direction_1day: string;
+  };
+  error?: string;
+}
+
+export const getMTFConfluence = () =>
+  fetcher<MTFConfluence>('/v1/nifty50/mtf-confluence');
+
+// ─── Futures Basis ────────────────────────────────────────────────────────────
+export interface FuturesBasisHistoryRow {
+  date: string;
+  futures_close: number | null;
+  volume: number;
+  oi: number;
+  annualised_carry_pct: number | null;
+}
+
+export interface FuturesBasis {
+  timestamp: string;
+  near_expiry: string;
+  dte: number;
+  spot_price: number;
+  futures_ltp: number;
+  basis_pts: number;
+  basis_pct: number;
+  annualised_carry_pct: number;
+  avg_carry_10d: number | null;
+  fair_basis_pts: number;
+  basis_vs_fair: number;
+  risk_free_rate_used: number;
+  regime: 'premium_elevated' | 'discount' | 'premium_compressed' | 'normal';
+  regime_note: string;
+  rollover_alert: 'bearish_unwinding' | 'aggressive_accumulation' | null;
+  rollover_note: string | null;
+  lot_size: number;
+  history: FuturesBasisHistoryRow[];
+  error?: string;
+}
+
+export const getFuturesBasis = () =>
+  fetcher<FuturesBasis>('/v1/futures/basis');
+
+// ─── P&L Simulator ───────────────────────────────────────────────────────────
+export interface PnLScenarioRow {
+  iv_change: number;
+  cells: number[];
+}
+
+export interface PnLSimulator {
+  timestamp: string;
+  expiry: string;
+  dte: number;
+  spot_price: number;
+  strike: number;
+  option_type: string;
+  entry_price: number;
+  quantity: number;
+  lot_size: number;
+  spread_mode: boolean;
+  spread_strike: number | null;
+  spread_option_type: string | null;
+  spread_entry_price: number | null;
+  net_debit: number | null;
+  greeks: { delta: number; gamma: number; theta: number; vega: number; iv: number };
+  spread_greeks: { delta: number; gamma: number; theta: number; vega: number; iv: number } | null;
+  spot_steps: number[];
+  iv_steps: number[];
+  time_slices: number[];
+  scenarios: {
+    days_0: PnLScenarioRow[];
+    days_1: PnLScenarioRow[];
+    days_2: PnLScenarioRow[];
+    days_3: PnLScenarioRow[];
+    expiry: PnLScenarioRow[];
+    [key: string]: PnLScenarioRow[];
+  };
+  summary: {
+    breakeven_spot: number | null;
+    daily_theta_pnl: number;
+    max_loss_if_zero: number;
+    max_loss_spread: number | null;
+    max_gain_spread: number | null;
+    spread_width: number | null;
+    current_ltp: number | null;
+  };
+  error?: string;
+}
+
+export const getPnLSimulator = (params: {
+  strike: number;
+  option_type: string;
+  expiry?: string;
+  entry_price?: number;
+  quantity?: number;
+  spread_strike?: number;
+  spread_option_type?: string;
+}) => {
+  const qs = new URLSearchParams({
+    strike: String(params.strike),
+    option_type: params.option_type,
+  });
+  if (params.expiry) qs.set('expiry', params.expiry);
+  if (params.entry_price !== undefined) qs.set('entry_price', String(params.entry_price));
+  if (params.quantity !== undefined) qs.set('quantity', String(params.quantity));
+  if (params.spread_strike !== undefined) qs.set('spread_strike', String(params.spread_strike));
+  if (params.spread_option_type) qs.set('spread_option_type', params.spread_option_type);
+  return fetcher<PnLSimulator>(`/v1/options/pnl-simulator?${qs}`);
+};
+
+// ─── HV Cone ─────────────────────────────────────────────────────────────────
+export interface HVConePoint {
+  lookback: number;
+  current_hv: number;
+  p10: number;
+  p25: number;
+  p50: number;
+  p75: number;
+  p90: number;
+  pct_rank: number;
+  iv_rv_ratio: number | null;
+  sample_count: number;
+}
+
+export interface HVCone {
+  timestamp: string;
+  spot_price: number;
+  candle_count: number;
+  current_vix: number | null;
+  cone: HVConePoint[];
+  lookbacks: number[];
+  note: string;
+  error?: string;
+}
+
+export const getHVCone = () => fetcher<HVCone>('/v1/nifty50/hv-cone');
+
+// ─── Market Regime ────────────────────────────────────────────────────────────
+export type RegimeLabel = 'trending_bullish' | 'trending_bearish' | 'breakout_imminent' | 'mean_reverting' | 'choppy';
+
+export interface MarketRegime {
+  timestamp: string;
+  regime: RegimeLabel;
+  strength: string;
+  guidance: string;
+  spot_price: number;
+  inputs: {
+    adx: number;
+    plus_di: number;
+    minus_di: number;
+    bb_width_current: number | null;
+    bb_width_avg: number | null;
+    bb_squeeze: boolean;
+    atr_ratio: number | null;
+    vix: number | null;
+    vix_regime: string | null;
+  };
+  error?: string;
+}
+
+export const getMarketRegime = () => fetcher<MarketRegime>('/v1/nifty50/market-regime');
+
+// ─── Correlation Matrix ───────────────────────────────────────────────────────
+export interface CorrelationEntry {
+  name: string;
+  ticker: string;
+  correlations: Record<string, number | null>;
+  trend: 'rising' | 'falling' | 'stable' | 'unknown';
+  interpretation: string;
+  note: string;
+  aligned_count: number;
+}
+
+export interface CorrelationMatrix {
+  timestamp: string;
+  nifty_close: number | null;
+  windows: number[];
+  matrix: Record<string, CorrelationEntry>;
+  summary: string;
+  error?: string;
+}
+
+export const getCorrelationMatrix = () => fetcher<CorrelationMatrix>('/v1/macro/correlation');
+
+// ── Feature 1: IVR / IVP ─────────────────────────────────────────────────────
+export interface IVRIVPStrike {
+  strike: number;
+  ce_iv: number;
+  pe_iv: number;
+  avg_iv: number;
+  ivr: number;
+  ivp: number;
+  signal: 'buy_debit_spread' | 'neutral' | 'buy_viable';
+  is_atm: boolean;
+}
+
+export interface IVRIVP {
+  timestamp: string;
+  current_vix: number;
+  vix_52w_high: number;
+  vix_52w_low: number;
+  atm_ivr: number;
+  atm_ivp: number;
+  signal: 'buy_debit_spread' | 'neutral' | 'buy_viable';
+  restrict_naked: boolean;
+  guidance: string;
+  strikes: IVRIVPStrike[];
+  expiry: string | null;
+  error?: string;
+}
+
+export const getIVRIVP = (expiry?: string) =>
+  fetcher<IVRIVP>(`/v1/options/ivr-ivp${expiry ? `?expiry=${expiry}` : ''}`);
+
+// ── Feature 2: CVD ────────────────────────────────────────────────────────────
+export interface CVDPoint {
+  time: string;
+  price: number;
+  cvd: number;
+  buy_vol: number;
+  sell_vol: number;
+  delta: number;
+}
+
+export interface CVD {
+  timestamp: string;
+  source: string;
+  source_note: string;
+  candle_count: number;
+  current_cvd: number;
+  session_high_cvd: number;
+  session_low_cvd: number;
+  divergence: string;
+  divergence_note: string;
+  depth_imbalance: number | null;
+  depth_note: string;
+  cvd_series: CVDPoint[];
+  error?: string;
+}
+
+export const getCVD = () => fetcher<CVD>('/v1/nifty50/cvd');
+
+// ── Feature 3: GEX Velocity ───────────────────────────────────────────────────
+export interface GEXVelocityPoint {
+  time: string;
+  net_gex: number;
+  total_gex: number;
+  zero_gamma: number | null;
+  call_wall: number | null;
+  put_wall: number | null;
+}
+
+export interface GEXStrikeMover {
+  strike: number;
+  net_gex_change: number;
+  direction: 'building' | 'decaying';
+  current_net_gex: number;
+}
+
+export interface GEXVelocity {
+  timestamp: string;
+  expiry: string | null;
+  snapshot_count: number;
+  elapsed_hours: number;
+  net_gex_start: number;
+  net_gex_current: number;
+  total_gex_current: number;
+  velocity: number;
+  total_gex_velocity: number;
+  accelerating: boolean;
+  direction: string;
+  direction_note: string;
+  gex_series: GEXVelocityPoint[];
+  strike_movers: GEXStrikeMover[];
+  error?: string;
+}
+
+export const getGEXVelocity = (expiry?: string) =>
+  fetcher<GEXVelocity>(`/v1/nifty50/gex-velocity${expiry ? `?expiry=${expiry}` : ''}`);
+
+// ── Feature 4: Heavyweight VWAP ───────────────────────────────────────────────
+export interface HeavyweightStock {
+  symbol: string;
+  name: string;
+  weight: number;
+  current_price?: number;
+  vwap?: number;
+  vwap_gap_pct?: number;
+  vs_vwap: 'above' | 'below' | 'at' | 'unknown';
+  vol_trend: 'expanding' | 'contracting' | 'neutral' | 'unknown';
+  candle_count?: number;
+  error?: string;
+}
+
+export interface HeavyweightVWAP {
+  timestamp: string;
+  above_count: number;
+  below_count: number;
+  expanding_volume_count: number;
+  weighted_above_pct: number;
+  signal: 'confirmed' | 'weak' | 'invalid';
+  signal_valid: boolean;
+  signal_note: string;
+  heavyweights: HeavyweightStock[];
+  error?: string;
+}
+
+export const getHeavyweightVWAP = () => fetcher<HeavyweightVWAP>('/v1/nifty50/heavyweight-vwap');
+
+// ── Feature 5: Sweep Detection ────────────────────────────────────────────────
+export interface SweepAlert {
+  strike: number;
+  ce_volume: number;
+  pe_volume: number;
+  ce_oi: number;
+  pe_oi: number;
+  ce_ltp: number;
+  pe_ltp: number;
+  vol_oi_ratio: number;
+  sweep_direction: 'call_sweep' | 'put_sweep' | 'none';
+  is_block: boolean;
+  ce_notional_lakh: number;
+  pe_notional_lakh: number;
+  flags: string[];
+  distance_from_spot: number | null;
+}
+
+export interface SweepDetection {
+  timestamp: string;
+  expiry: string;
+  spot: number;
+  source: string;
+  source_note: string;
+  alert_count: number;
+  call_sweeps: number;
+  put_sweeps: number;
+  block_trades: number;
+  summary: string;
+  alerts: SweepAlert[];
+  error?: string;
+}
+
+export const getSweepDetection = (expiry?: string) =>
+  fetcher<SweepDetection>(`/v1/options/sweeps${expiry ? `?expiry=${expiry}` : ''}`);
+
+// ── Feature 6: Bid-Ask Spread ─────────────────────────────────────────────────
+export interface BidAskStrike {
+  strike: number;
+  side: 'CE' | 'PE';
+  is_atm: boolean;
+  bid: number;
+  ask: number;
+  mid: number;
+  ltp: number;
+  bid_qty: number;
+  ask_qty: number;
+  spread_pts: number;
+  spread_pct: number;
+  executability: 'liquid' | 'acceptable' | 'wide' | 'un-executable';
+  liquidity_score: number;
+  effective_premium: number;
+  crossing_cost_per_lot: number;
+}
+
+export interface BidAskSpread {
+  timestamp: string;
+  expiry: string;
+  spot: number;
+  overall_rating: 'liquid' | 'acceptable' | 'wide' | 'un-executable';
+  overall_note: string;
+  un_executable_count: number;
+  wide_count: number;
+  strikes: BidAskStrike[];
+  error?: string;
+}
+
+export const getBidAskSpread = (expiry?: string) =>
+  fetcher<BidAskSpread>(`/v1/options/bid-ask-spread${expiry ? `?expiry=${expiry}` : ''}`);

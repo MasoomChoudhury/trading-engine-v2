@@ -5,6 +5,12 @@ import DerivedMetrics from '../components/DerivedMetrics';
 import MarketStatusBanner from '../components/MarketStatusBanner';
 import IndiaVIXPanel from '../components/IndiaVIXPanel';
 import GlobalCuesPanel from '../components/GlobalCuesPanel';
+import MTFConfluencePanel from '../components/MTFConfluencePanel';
+import MarketRegimePanel from '../components/MarketRegimePanel';
+import CVDPanel from '../components/CVDPanel';
+import GEXVelocityPanel from '../components/GEXVelocityPanel';
+import HeavyweightVWAPPanel from '../components/HeavyweightVWAPPanel';
+import SignalLogPanel from '../components/SignalLogPanel';
 import { useIndicators, useMarketDepth } from '../hooks/useIndicators';
 import { Loader2, TrendingUp, TrendingDown } from 'lucide-react';
 
@@ -257,6 +263,24 @@ export default function Dashboard() {
 
       {/* Panel 9: Market Depth */}
       <MarketDepthPanel />
+
+      {/* Panel 10: MTF Confluence Score */}
+      <MTFConfluencePanel />
+
+      {/* Panel 11: Market Regime Classifier */}
+      <MarketRegimePanel />
+
+      {/* Panel 12: Cumulative Volume Delta */}
+      <CVDPanel />
+
+      {/* Panel 13: Intraday GEX Velocity */}
+      <GEXVelocityPanel />
+
+      {/* Panel 14: Heavyweight VWAP Divergence */}
+      <HeavyweightVWAPPanel />
+
+      {/* Panel 15: Signal Log — event-driven, collapsible */}
+      <SignalLogPanel />
     </div>
   );
 }

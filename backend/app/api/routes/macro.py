@@ -5,6 +5,7 @@ from app.services.macro_service import get_events, add_event
 from app.services.fii_service import get_fii_history, fetch_and_store_fii
 from app.services import global_cues_service, fii_deriv_service
 from app.services.premarket_service import get_premarket_bias
+from app.services.correlation_service import get_correlation_matrix
 
 router = APIRouter(prefix="/api/v1/macro", tags=["Macro Calendar"])
 
@@ -118,3 +119,19 @@ async def create_event(body: AddEventRequest):
     except Exception as e:
         logger.error(f"Macro event add failed: {e}")
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/correlation")
+async def get_correlation():
+    """
+    Rolling Pearson correlation between Nifty 50 and global indices (S&P 500, Nikkei, Hang Seng)
+    over 10, 20, 30-day windows of daily log returns.
+    - High correlation (>0.7): moves are globally driven, harder to fade
+    - Decoupling (<0.2): idiosyncratic domestic move — more tradeable / divergence signal
+    - Rising correlation on a down day: global sell-off dragging Nifty down
+    """
+    try:
+        return await get_correlation_matrix()
+    except Exception as e:
+        logger.error(f"Correlation matrix failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))

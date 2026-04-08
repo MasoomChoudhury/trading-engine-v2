@@ -90,9 +90,11 @@ def _calculate_zero_gamma_level(sorted_strikes: list[StrikeGEX], cumulative: lis
         if (prev_cum <= 0 <= curr_cum) or (prev_cum >= 0 >= curr_cum):
             prev_strike = sorted_strikes[i - 1].strike
             curr_strike = sorted_strikes[i].strike
-            if curr_strike == prev_strike:
-                return prev_strike
-            t = -prev_cum / (curr_cum - prev_cum)
+            denominator = curr_cum - prev_cum
+            if denominator == 0:
+                # Cumulative values equal at both sides — no true crossing, skip
+                continue
+            t = -prev_cum / denominator
             return prev_strike + t * (curr_strike - prev_strike)
     return None
 

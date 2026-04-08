@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getMacroCalendar, MacroEvent, getFIIFlows, refreshFIIDerivatives } from '../lib/api';
 import { useFIIDerivatives } from '../hooks/useIndicators';
 import PreMarketBiasPanel from '../components/PreMarketBiasPanel';
+import CorrelationPanel from '../components/CorrelationPanel';
 import { AlertTriangle, Calendar, TrendingUp, DollarSign, BarChart2, Star, Clock, RefreshCw } from 'lucide-react';
 import type { ReactNode } from 'react';
 import {
@@ -549,6 +550,9 @@ export default function Macro() {
 
       {/* Panel 7: FII Derivatives */}
       <FIIDerivativesPanel />
+
+      {/* Panel 8: Nifty Global Correlation Matrix */}
+      <CorrelationPanel />
 
       <p className="text-xs text-slate-600 text-center pb-4">
         Dates marked ~approx are estimated. Confirm exact dates before trading around events.

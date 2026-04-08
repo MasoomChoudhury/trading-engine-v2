@@ -8,9 +8,69 @@ import httpx
 IST = timezone(timedelta(hours=5, minutes=30))
 
 NSE_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": "en-US,en;q=0.9",
+    "Accept-Encoding": "gzip, deflate, br",
+    "Connection": "keep-alive",
     "Referer": "https://www.nseindia.com",
+    "Cache-Control": "no-cache",
 }
+
+NSE_API_HEADERS = {
+    **NSE_HEADERS,
+    "Accept": "application/json, text/plain, */*",
+    "X-Requested-With": "XMLHttpRequest",
+}
+
+
+async def _warm_nse_session(client: httpx.AsyncClient) -> bool:
+    """
+    Establish an NSE session by hitting multiple pages to seed cookies.
+    NSE requires a real browsing sequence to issue valid session cookies.
+    Returns True if session was established.
+    """
+    import asyncio
+    try:
+        # Step 1: Homepage seeds the main cookies (nsit, nseappid)
+        r1 = await client.get(
+            "https://www.nseindia.com/",
+            headers=NSE_HEADERS,
+            timeout=15,
+        )
+        if r1.status_code not in (200, 301, 302):
+            logger.debug(f"NSE homepage returned {r1.status_code}")
+            return False
+
+        await asyncio.sleep(1.5)  # mimic human browsing delay
+
+        # Step 2: Market data page seeds nseQuoteSymbols / bm_* cookies
+        await client.get(
+            "https://www.nseindia.com/market-data/securities-available-for-trading",
+            headers=NSE_HEADERS,
+            timeout=10,
+        )
+        await asyncio.sleep(1.0)
+
+        # Step 3: The FII/DII activity page specifically — seeds path-specific cookies
+        await client.get(
+            "https://www.nseindia.com/market-data/fii-dii-activity",
+            headers=NSE_HEADERS,
+            timeout=10,
+        )
+        await asyncio.sleep(0.8)
+
+        # Step 4: Hit the derivatives-market page — primes cookies for fnoparticipants API
+        await client.get(
+            "https://www.nseindia.com/market-data/derivatives-market",
+            headers={**NSE_HEADERS, "Referer": "https://www.nseindia.com/market-data/fii-dii-activity"},
+            timeout=10,
+        )
+        logger.debug("NSE session warmed successfully (4-step)")
+        return True
+    except Exception as e:
+        logger.warning(f"NSE session warm failed: {e}")
+        return False
 
 
 async def ensure_fii_deriv_table() -> None:
@@ -102,30 +162,132 @@ def _parse_fii_row(reader_rows: list[list[str]]) -> dict | None:
     return None
 
 
+def _parse_fii_row_json(data: list[dict]) -> dict | None:
+    """
+    Parse FII/FPI row from NSE JSON API response.
+    NSE JSON format: list of dicts with keys like 'clientType', 'futIndexLong', etc.
+    """
+    for row in data:
+        ct = str(row.get("clientType") or row.get("client_type") or "").strip().upper()
+        if "FII" not in ct and "FPI" not in ct:
+            continue
+        try:
+            fil = float(row.get("futIndexLong") or row.get("future_index_long") or 0)
+            fis = float(row.get("futIndexShort") or row.get("future_index_short") or 0)
+            oicl = float(row.get("optIndexCallsLong") or row.get("option_index_calls_long") or 0)
+            oics = float(row.get("optIndexCallsShort") or row.get("option_index_calls_short") or 0)
+            oipl = float(row.get("optIndexPutsLong") or row.get("option_index_puts_long") or 0)
+            oips = float(row.get("optIndexPutsShort") or row.get("option_index_puts_short") or 0)
+            return {
+                "future_index_long": fil,
+                "future_index_short": fis,
+                "future_index_net": fil - fis,
+                "option_index_calls_long": oicl,
+                "option_index_calls_short": oics,
+                "option_index_puts_long": oipl,
+                "option_index_puts_short": oips,
+            }
+        except Exception as e:
+            logger.warning(f"FII JSON row parse error: {e}")
+    return None
+
+
+async def _fetch_via_json_api(client: httpx.AsyncClient, d: date) -> dict | None:
+    """
+    Try NSE JSON API: /api/historical/fnoparticipants?trade_date=DD-Mon-YYYY
+    This is more reliable than CSV if cookies are set.
+    """
+    date_str = d.strftime("%d-%b-%Y")  # e.g. "07-Apr-2026"
+    url = f"https://www.nseindia.com/api/historical/fnoparticipants?trade_date={date_str}"
+    try:
+        resp = await client.get(url, headers=NSE_API_HEADERS, timeout=15)
+        if resp.status_code == 401 or resp.status_code == 403:
+            logger.debug(f"NSE JSON API auth failed for {date_str}: {resp.status_code}")
+            return None
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        payload = resp.json()
+        # Response can be {"data": [...]} or a direct list
+        rows = payload.get("data") if isinstance(payload, dict) else payload
+        if rows:
+            return _parse_fii_row_json(rows)
+    except Exception as e:
+        logger.debug(f"NSE JSON API fetch failed for {date_str}: {e}")
+    return None
+
+
+async def _fetch_via_csv(client: httpx.AsyncClient, d: date) -> dict | None:
+    """
+    Fetch NSE archives CSV for participant OI on a given date.
+    nsearchives.nseindia.com is a CDN — no cookies required, but needs a valid Referer.
+    """
+    ddmmyyyy = d.strftime("%d%m%Y")
+    url = f"https://nsearchives.nseindia.com/content/nsccl/nse_fo_participant_oi_{ddmmyyyy}.csv"
+    csv_headers = {
+        "User-Agent": NSE_HEADERS["User-Agent"],
+        "Accept": "text/csv,text/plain,*/*",
+        "Referer": "https://www.nseindia.com/market-data/fii-dii-activity",
+        "Accept-Encoding": "gzip, deflate, br",
+    }
+    try:
+        resp = await client.get(url, headers=csv_headers, timeout=20)
+        if resp.status_code == 404:
+            return None
+        resp.raise_for_status()
+        reader = csv.reader(io.StringIO(resp.text))
+        rows = list(reader)
+        if len(rows) < 2:
+            logger.debug(f"NSE CSV for {ddmmyyyy}: response too short ({len(rows)} rows)")
+            return None
+        return _parse_fii_row(rows)
+    except Exception as e:
+        logger.debug(f"NSE CSV fetch failed for {ddmmyyyy}: {e}")
+    return None
+
+
 async def fetch_nse_participant_oi() -> list[dict]:
-    """Try last 5 trading days and return parsed FII derivative records."""
+    """
+    Try last 5 trading days and return parsed FII derivative records.
+
+    Strategy:
+      1. Warm NSE session (hit homepage to get cookies)
+      2. Try NSE JSON API first (more reliable, uses cookies)
+      3. Fall back to NSE archives CSV for any day that JSON API misses
+    """
     records: list[dict] = []
     days_to_try = _last_n_trading_days(5)
 
-    async with httpx.AsyncClient(timeout=20, follow_redirects=True) as client:
+    async with httpx.AsyncClient(
+        timeout=20,
+        follow_redirects=True,
+        headers=NSE_HEADERS,
+    ) as client:
+        # Warm session — critical for NSE cookie auth
+        session_ok = await _warm_nse_session(client)
+        if not session_ok:
+            logger.warning("NSE session warm failed — FII data fetch may be blocked")
+
         for d in days_to_try:
-            ddmmyyyy = d.strftime("%d%m%Y")
-            url = f"https://nsearchives.nseindia.com/content/nsccl/nse_fo_participant_oi_{ddmmyyyy}.csv"
-            try:
-                resp = await client.get(url, headers=NSE_HEADERS)
-                if resp.status_code == 404:
-                    logger.debug(f"NSE participant OI 404 for {ddmmyyyy}")
-                    continue
-                resp.raise_for_status()
-                text = resp.text
-                reader = csv.reader(io.StringIO(text))
-                all_rows = list(reader)
-                parsed = _parse_fii_row(all_rows)
-                if parsed:
-                    records.append({"trade_date": d.isoformat(), **parsed})
-            except Exception as e:
-                logger.warning(f"NSE participant OI fetch failed for {ddmmyyyy}: {e}")
-                continue
+            # Try JSON API first (requires cookies)
+            parsed = await _fetch_via_json_api(client, d)
+
+            # If JSON API returns nothing, fall back to CSV archive
+            if not parsed:
+                parsed = await _fetch_via_csv(client, d)
+
+            if parsed:
+                records.append({"trade_date": d.isoformat(), **parsed})
+                logger.info(f"FII deriv record fetched for {d.isoformat()}")
+            else:
+                logger.debug(f"No FII data available for {d.isoformat()} (market holiday or data not yet published)")
+
+    if not records:
+        logger.warning(
+            "fetch_nse_participant_oi: no records retrieved. "
+            "Possible causes: NSE blocking (cookies), data not yet published, or market holidays. "
+            "Check backend logs and try the /fii-derivatives/refresh endpoint after 6 PM IST."
+        )
 
     return records
 

@@ -9,6 +9,18 @@ import { useDashboard } from '../context/DashboardContext';
 import { AlertTriangle, TrendingUp, TrendingDown, Minus, Eye, EyeOff, Info, Zap, Target } from 'lucide-react';
 import { useMemo } from 'react';
 import { useIVSkew, useOITrend, useBuyersEdge, useVolIndicators, useStraddleIntraday, usePcrDivergence } from '../hooks/useIndicators';
+import IVTermStructurePanel from '../components/IVTermStructurePanel';
+import DealerDeltaPanel from '../components/DealerDeltaPanel';
+import PnLSimulatorPanel from '../components/PnLSimulatorPanel';
+import HVConePanel from '../components/HVConePanel';
+import IVRIVPPanel from '../components/IVRIVPPanel';
+import SweepPanel from '../components/SweepPanel';
+import BidAskPanel from '../components/BidAskPanel';
+import PositionSizingPanel from '../components/PositionSizingPanel';
+import RRHistoryPanel from '../components/RRHistoryPanel';
+import StraddleIVContextPanel from '../components/StraddleIVContextPanel';
+import MaxPainTrendPanel from '../components/MaxPainTrendPanel';
+import { useIndiaVIX } from '../hooks/useIndicators';
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -1190,10 +1202,32 @@ function BuyersToolkitPanel() {
   );
 }
 
+// ── OI Intent Badge ───────────────────────────────────────────────────────────
+import type { OiIntent } from '../lib/api';
+
+function OiIntentBadge({ intent }: { intent: OiIntent | undefined }) {
+  if (!intent || intent === 'flat') return <span className="text-slate-600 text-[10px]">—</span>;
+  const map: Record<string, { label: string; cls: string }> = {
+    fresh_long:  { label: 'Fresh Long',  cls: 'bg-emerald-500/20 text-emerald-300' },
+    fresh_short: { label: 'Fresh Short', cls: 'bg-red-500/20 text-red-300' },
+    short_cover: { label: 'Sq-Off Bear', cls: 'bg-sky-500/20 text-sky-300' },
+    long_exit:   { label: 'Exit Long',   cls: 'bg-orange-500/20 text-orange-300' },
+    build:       { label: 'Build',       cls: 'bg-green-500/15 text-green-400' },
+    unwind:      { label: 'Unwind',      cls: 'bg-red-500/15 text-red-400' },
+  };
+  const { label, cls } = map[intent] ?? { label: intent, cls: 'bg-slate-500/20 text-slate-400' };
+  return (
+    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium whitespace-nowrap ${cls}`}>
+      {label}
+    </span>
+  );
+}
+
 // ── Main Options Page ─────────────────────────────────────────────────────────
 
 export default function Options() {
   const { hideExpiry, setHideExpiry } = useDashboard();
+  const { data: vixData } = useIndiaVIX();
 
   const { data, isLoading, error, refetch } = useQuery({
     queryKey: ['options-analytics'],
@@ -1286,6 +1320,20 @@ export default function Options() {
           sub={straddleInterpret}
           color="text-cyan-400"
         />
+        {(() => {
+          const impliedMovePct = current.straddle_premium > 0 && current.spot_price > 0
+            ? (current.straddle_premium / current.spot_price) * 100 : null;
+          const upper = impliedMovePct ? Math.round(current.spot_price * (1 + impliedMovePct / 100) / 50) * 50 : null;
+          const lower = impliedMovePct ? Math.round(current.spot_price * (1 - impliedMovePct / 100) / 50) * 50 : null;
+          return (
+            <StatCard
+              label="Implied Move"
+              value={impliedMovePct ? `±${impliedMovePct.toFixed(1)}%` : '—'}
+              sub={upper && lower ? `${lower.toLocaleString('en-IN')} – ${upper.toLocaleString('en-IN')}` : 'by expiry'}
+              color="text-purple-400"
+            />
+          );
+        })()}
         <StatCard
           label="OI Wall"
           value={`₹${current.oi_wall_strike?.toLocaleString('en-IN') ?? '—'}`}
@@ -1346,8 +1394,10 @@ export default function Options() {
                 <thead className="sticky top-0 bg-slate-800">
                   <tr>
                     <th className="text-slate-400 font-normal text-right pb-2 pr-4">Strike</th>
-                    <th className="text-purple-400 font-medium text-right pb-2 pr-4">CE Δ OI</th>
-                    <th className="text-teal-400 font-medium text-right pb-2">PE Δ OI</th>
+                    <th className="text-purple-400 font-medium text-right pb-2 pr-3">CE Δ OI</th>
+                    <th className="text-purple-300 font-normal text-left pb-2 pr-4">Intent</th>
+                    <th className="text-teal-400 font-medium text-right pb-2 pr-3">PE Δ OI</th>
+                    <th className="text-teal-300 font-normal text-left pb-2">Intent</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1357,11 +1407,17 @@ export default function Options() {
                         {row.strike === current.atm_strike && <span className="text-blue-400 mr-1 text-xs">ATM</span>}
                         {row.strike}
                       </td>
-                      <td className={`text-right pr-4 font-mono py-0.5 ${row.ce_change > 0 ? 'text-green-400' : row.ce_change < 0 ? 'text-red-400' : 'text-slate-500'}`}>
+                      <td className={`text-right pr-3 font-mono py-0.5 ${row.ce_change > 0 ? 'text-green-400' : row.ce_change < 0 ? 'text-red-400' : 'text-slate-500'}`}>
                         {row.ce_change > 0 ? '+' : ''}{fmtVol(row.ce_change)}
                       </td>
-                      <td className={`text-right font-mono py-0.5 ${row.pe_change > 0 ? 'text-green-400' : row.pe_change < 0 ? 'text-red-400' : 'text-slate-500'}`}>
+                      <td className="pr-4 py-0.5">
+                        <OiIntentBadge intent={row.ce_intent} />
+                      </td>
+                      <td className={`text-right pr-3 font-mono py-0.5 ${row.pe_change > 0 ? 'text-green-400' : row.pe_change < 0 ? 'text-red-400' : 'text-slate-500'}`}>
                         {row.pe_change > 0 ? '+' : ''}{fmtVol(row.pe_change)}
+                      </td>
+                      <td className="py-0.5">
+                        <OiIntentBadge intent={row.pe_intent} />
                       </td>
                     </tr>
                   ))}
@@ -1388,6 +1444,48 @@ export default function Options() {
 
       {/* Panel 9: Buyer's Toolkit */}
       <BuyersToolkitPanel />
+
+      {/* Panel 10: IV Term Structure */}
+      <IVTermStructurePanel />
+
+      {/* Panel 13: HV Cone */}
+      <HVConePanel />
+
+      {/* Panel 11: Dealer Net Delta Exposure */}
+      <DealerDeltaPanel />
+
+      {/* Panel 12: P&L Scenario Simulator */}
+      <PnLSimulatorPanel />
+
+      {/* Panel 14: IV Rank & IV Percentile */}
+      <IVRIVPPanel />
+
+      {/* Panel 15: Options Sweeps & Block Trades */}
+      <SweepPanel />
+
+      {/* Panel 16: Bid-Ask Spread Tracker */}
+      <BidAskPanel />
+
+      {/* Panel 17: Position Sizing Engine */}
+      <PositionSizingPanel />
+
+      {/* Panel 18: 25-Delta Risk Reversal History + Skew Rank */}
+      <RRHistoryPanel />
+
+      {/* Panel 19: Max Pain Trend (EOD-only, accumulates over sessions) */}
+      <MaxPainTrendPanel
+        currentMaxPain={data?.current?.max_pain}
+        spot={data?.current?.spot_price}
+      />
+
+      {/* Panel 20: Historical Straddle IV Context */}
+      {data?.current && (
+        <StraddleIVContextPanel
+          dte={data.current.days_to_expiry}
+          vix={vixData?.vix ?? 0}
+          atmIv={null}
+        />
+      )}
     </div>
   );
 }

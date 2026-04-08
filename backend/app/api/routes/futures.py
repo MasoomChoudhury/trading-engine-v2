@@ -5,6 +5,7 @@ from app.services.futures_service import (
     fetch_futures_daily_candles,
     compute_futures_analytics,
 )
+from app.services.futures_basis_service import get_futures_basis
 
 router = APIRouter(prefix="/api/v1/futures", tags=["Futures"])
 
@@ -66,3 +67,20 @@ async def get_futures_contracts():
     except Exception as e:
         logger.error(f"Failed to fetch futures contracts: {e}")
         raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/basis")
+async def get_basis():
+    """
+    Futures basis (futures LTP − spot) and cost of carry.
+    - Rising basis: longs paying up → bullish carry, institutional accumulation
+    - Falling basis: unwinding or short buildup
+    - Negative basis: short pressure or discount due to aggressive selling
+    Includes annualised carry %, fair basis from risk-free rate model, and 30-day history.
+    """
+    try:
+        return await get_futures_basis()
+    except Exception as e:
+        logger.error(f"Futures basis failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+

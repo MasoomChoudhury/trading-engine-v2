@@ -17,6 +17,8 @@ import {
 import { useMemo } from 'react';
 import { AlertTriangle, TrendingUp, BarChart2, Activity, Eye, EyeOff } from 'lucide-react';
 import { useDashboard } from '../context/DashboardContext';
+import FuturesBasisPanel from '../components/FuturesBasisPanel';
+import PivotLevelsPanel from '../components/PivotLevelsPanel';
 
 const fmtVolume = (v: number) => {
   if (v >= 1_000_000) return `${(v / 1_000_000).toFixed(1)}M`;
@@ -366,6 +368,12 @@ export default function Futures() {
           </span>
         </div>
       </div>
+
+      {/* Futures Basis / Cost of Carry */}
+      <FuturesBasisPanel />
+
+      {/* Weekly & Monthly Pivot Levels */}
+      <PivotLevelsPanel />
     </div>
   );
 }

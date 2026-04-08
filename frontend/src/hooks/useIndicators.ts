@@ -1,5 +1,5 @@
 import { useQuery } from '@tanstack/react-query';
-import { getIndicators, getDerivedMetrics, getGEX, getCandles, getIndicatorSeries, getGEXHistory, getIVSkew, getOITrend, getFIIFlows, getAdvanceDecline, getMarketDepth, getIndiaVIX, getGlobalCues, getFIIDerivatives, getBuyersEdge, getVolIndicators, getStraddleIntraday, getPcrDivergence, getSectorRS } from '../lib/api';
+import { getIndicators, getDerivedMetrics, getGEX, getCandles, getIndicatorSeries, getGEXHistory, getIVSkew, getOITrend, getFIIFlows, getAdvanceDecline, getMarketDepth, getIndiaVIX, getGlobalCues, getFIIDerivatives, getBuyersEdge, getVolIndicators, getStraddleIntraday, getPcrDivergence, getSectorRS, getIVTermStructure, getDealerDeltaExposure, getMTFConfluence, getFuturesBasis, getPnLSimulator, getHVCone, getMarketRegime, getCorrelationMatrix, getIVRIVP, getCVD, getGEXVelocity, getHeavyweightVWAP, getSweepDetection, getBidAskSpread } from '../lib/api';
 
 export function useIndicators(interval = '5min') {
   return useQuery({
@@ -170,5 +170,141 @@ export function useIndicatorSeries(interval = '5min', limit = 100) {
     refetchInterval: 30000,
     refetchIntervalInBackground: true,
     retry: 2,
+  });
+}
+
+export function useIVTermStructure() {
+  return useQuery({
+    queryKey: ['iv-term-structure'],
+    queryFn: getIVTermStructure,
+    refetchInterval: 5 * 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useDealerDeltaExposure(expiry?: string) {
+  return useQuery({
+    queryKey: ['dealer-delta', expiry],
+    queryFn: () => getDealerDeltaExposure(expiry),
+    refetchInterval: 5 * 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useMTFConfluence() {
+  return useQuery({
+    queryKey: ['mtf-confluence'],
+    queryFn: getMTFConfluence,
+    refetchInterval: 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useFuturesBasis() {
+  return useQuery({
+    queryKey: ['futures-basis'],
+    queryFn: getFuturesBasis,
+    refetchInterval: 5 * 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useHVCone() {
+  return useQuery({
+    queryKey: ['hv-cone'],
+    queryFn: getHVCone,
+    refetchInterval: 10 * 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useMarketRegime() {
+  return useQuery({
+    queryKey: ['market-regime'],
+    queryFn: getMarketRegime,
+    refetchInterval: 5 * 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useCorrelationMatrix() {
+  return useQuery({
+    queryKey: ['correlation-matrix'],
+    queryFn: getCorrelationMatrix,
+    refetchInterval: 15 * 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function usePnLSimulator(
+  params: {
+    strike: number;
+    option_type: string;
+    expiry?: string;
+    entry_price?: number;
+    quantity?: number;
+    spread_strike?: number;
+    spread_option_type?: string;
+  } | null,
+) {
+  return useQuery({
+    queryKey: ['pnl-simulator', params],
+    queryFn: () => getPnLSimulator(params!),
+    enabled: params !== null && params.strike > 0,
+    retry: 1,
+  });
+}
+
+export function useIVRIVP(expiry?: string) {
+  return useQuery({
+    queryKey: ['ivr-ivp', expiry],
+    queryFn: () => getIVRIVP(expiry),
+    refetchInterval: 10 * 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useCVD() {
+  return useQuery({
+    queryKey: ['cvd'],
+    queryFn: getCVD,
+    refetchInterval: 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useGEXVelocity(expiry?: string) {
+  return useQuery({
+    queryKey: ['gex-velocity', expiry],
+    queryFn: () => getGEXVelocity(expiry),
+    refetchInterval: 5 * 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useHeavyweightVWAP() {
+  return useQuery({
+    queryKey: ['heavyweight-vwap'],
+    queryFn: getHeavyweightVWAP,
+    refetchInterval: 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useSweepDetection(expiry?: string) {
+  return useQuery({
+    queryKey: ['sweeps', expiry],
+    queryFn: () => getSweepDetection(expiry),
+    refetchInterval: 3 * 60 * 1000,
+    retry: 1,
+  });
+}
+
+export function useBidAskSpread(expiry?: string) {
+  return useQuery({
+    queryKey: ['bid-ask-spread', expiry],
+    queryFn: () => getBidAskSpread(expiry),
+    refetchInterval: 30 * 1000,
+    retry: 1,
   });
 }

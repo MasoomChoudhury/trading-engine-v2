@@ -247,6 +247,15 @@ async def save_straddle_snapshot() -> None:
         pe_iv = float(pe_g.get("iv") or 0) or None
         atm_iv = round((ce_iv + pe_iv) / 2, 2) if ce_iv and pe_iv else (ce_iv or pe_iv)
 
+        # Fetch VIX alongside snapshot — persisted for historical IV context queries
+        vix_snap: float | None = None
+        try:
+            from app.services.vix_service import get_india_vix
+            vix_data = await get_india_vix()
+            vix_snap = float(vix_data.get("vix", 0)) or None
+        except Exception:
+            pass
+
         async with get_ts_session() as session:
             ins = pg_insert(StraddleSnapshot).values(
                 timestamp=_ist_now(),
@@ -259,14 +268,21 @@ async def save_straddle_snapshot() -> None:
                 ce_iv=ce_iv,
                 pe_iv=pe_iv,
                 atm_iv=atm_iv,
+                vix_at_snap=vix_snap,
+                dte_at_snap=dte,
             ).on_conflict_do_update(
                 index_elements=["timestamp"],
-                set_={"straddle_price": straddle, "spot": round(spot, 2)},
+                set_={
+                    "straddle_price": straddle,
+                    "spot": round(spot, 2),
+                    "vix_at_snap": vix_snap,
+                    "dte_at_snap": dte,
+                },
             )
             await session.execute(ins)
             await session.commit()
 
-        logger.debug(f"Straddle snapshot saved: spot={spot:.0f} atm={atm} straddle={straddle}")
+        logger.debug(f"Straddle snapshot saved: spot={spot:.0f} atm={atm} straddle={straddle} vix={vix_snap} dte={dte}")
 
     except Exception as e:
         logger.warning(f"Straddle snapshot failed: {e}")
@@ -279,18 +295,26 @@ async def ensure_straddle_table() -> None:
     async with get_ts_session() as session:
         await session.execute(text("""
             CREATE TABLE IF NOT EXISTS straddle_snapshots (
-                timestamp   TIMESTAMPTZ PRIMARY KEY,
-                expiry      TEXT        NOT NULL,
-                spot        NUMERIC,
-                atm_strike  NUMERIC,
-                ce_ltp      NUMERIC,
-                pe_ltp      NUMERIC,
+                timestamp      TIMESTAMPTZ PRIMARY KEY,
+                expiry         TEXT        NOT NULL,
+                spot           NUMERIC,
+                atm_strike     NUMERIC,
+                ce_ltp         NUMERIC,
+                pe_ltp         NUMERIC,
                 straddle_price NUMERIC,
-                ce_iv       NUMERIC,
-                pe_iv       NUMERIC,
-                atm_iv      NUMERIC
+                ce_iv          NUMERIC,
+                pe_iv          NUMERIC,
+                atm_iv         NUMERIC,
+                vix_at_snap    NUMERIC,
+                dte_at_snap    INTEGER
             )
         """))
+        # Add columns to existing tables that predate this migration
+        for col, dtype in [("vix_at_snap", "NUMERIC"), ("dte_at_snap", "INTEGER")]:
+            await session.execute(text(f"""
+                ALTER TABLE straddle_snapshots
+                ADD COLUMN IF NOT EXISTS {col} {dtype}
+            """))
         await session.commit()
     logger.info("straddle_snapshots table ensured")
 

@@ -8,6 +8,9 @@ from app.schemas.nifty50 import (
 )
 from app.services.upstox_client import upstox_client
 from app.services.indicator_calculator import calculate_all_indicators, calculate_indicator_series
+from app.services.mtf_confluence_service import build_mtf_confluence
+from app.services.hv_cone_service import get_hv_cone
+from app.services.regime_classifier_service import classify_market_regime
 from app.services.gex_calculator import calculate_gex
 from app.services.derived_metrics import calculate_derived_metrics
 from app.db.database import get_ts_session
@@ -285,35 +288,62 @@ async def get_derived_metrics(
 @router.get("/gex", response_model=GEXResponse)
 async def get_gex(expiry_date: str | None = Query(default=None)):
     """Get latest GEX data from Upstox option chain."""
+    # Build sorted list of upcoming expiries so we can fall through to the next one
+    # if a given expiry returns an empty chain (all-zero Greeks = dead chain).
+    expiry_candidates: list[str] = []
     if not expiry_date:
         contracts = await upstox_client.get_option_contracts(NIFTY_KEY)
         if contracts:
-            # Pick the nearest upcoming expiry (contracts may be unsorted, so sort by date)
-            from datetime import datetime
-            valid_expiries = [
+            today_str = ist_now().strftime("%Y-%m-%d")
+            valid_expiries = sorted(
                 c.get("expiry", "") for c in contracts
-                if c.get("expiry", "") and c.get("expiry", "") >= ist_now().strftime("%Y-%m-%d")
-            ]
-            if valid_expiries:
-                valid_expiries.sort()
-                expiry_date = valid_expiries[0]
-            else:
-                expiry_date = contracts[0].get("expiry", "")
-        if not expiry_date:
-            expiry_date = (ist_now() + timedelta(days=7)).strftime("%Y-%m-%d")
+                if c.get("expiry", "") and c.get("expiry", "") >= today_str
+            )
+            expiry_candidates = valid_expiries or [contracts[0].get("expiry", "")]
+        if not expiry_candidates:
+            expiry_candidates = [(ist_now() + timedelta(days=7)).strftime("%Y-%m-%d")]
+    else:
+        expiry_candidates = [expiry_date]
 
-    try:
-        gex_result = await calculate_gex(expiry_date, lot_size=50)
-    except Exception as e:
-        logger.error(f"GEX calculation failed: {e}")
+    gex_result = None
+    last_error: Exception | None = None
+    used_expiry = expiry_candidates[0]
+
+    for candidate in expiry_candidates[:3]:   # try up to 3 expiries before giving up
+        try:
+            result = await calculate_gex(candidate, lot_size=50)
+            # A dead chain (Upstox returning all-zero Greeks) produces total_gex == 0
+            # and no meaningful strike data. Fall through to next expiry in that case.
+            has_data = result.total_gex > 0 or any(
+                (s.get('call_gex', 0) or 0) != 0 or (s.get('put_gex', 0) or 0) != 0
+                for s in result.strike_gex
+            )
+            if has_data:
+                gex_result = result
+                used_expiry = candidate
+                if candidate != expiry_candidates[0]:
+                    logger.warning(
+                        f"Nifty GEX: {expiry_candidates[0]} returned empty chain "
+                        f"(all-zero Greeks) — using {candidate} instead"
+                    )
+                break
+            else:
+                logger.warning(f"Nifty GEX: {candidate} returned all-zero Greeks, trying next expiry")
+        except Exception as e:
+            logger.error(f"GEX calculation failed for expiry {candidate}: {e}")
+            last_error = e
+
+    if gex_result is None:
+        err_msg = str(last_error) if last_error else "All attempted expiries returned empty chains"
+        logger.error(f"Nifty GEX: no usable expiry found — {err_msg}")
         return GEXResponse(
             timestamp=ist_now().isoformat(),
-            expiry_date=expiry_date,
+            expiry_date=used_expiry,
             spot_price=0.0,
             total_gex=0.0,
             net_gex=0.0,
             regime="unknown",
-            regime_description=f"Error: {e}",
+            regime_description=f"Error: {err_msg}",
             zero_gamma_level=0.0,
             call_wall=0.0,
             put_wall=0.0,
@@ -562,3 +592,133 @@ async def get_live_price():
         ltt=ltt,
         cp=round(cp, 2) if cp else None,
     )
+
+
+@router.get("/mtf-confluence")
+async def get_mtf_confluence():
+    """
+    Multi-timeframe confluence score (0–100) synthesising 5min and 1day indicator signals.
+    Indicators: RSI, MACD histogram, EMA trend, Supertrend, ADX/DI, Bollinger position.
+    - 80–100: HIGH confluence — aligned across both timeframes
+    - 60–79:  MODERATE — mostly aligned
+    - 40–59:  MIXED — no edge, wait for resolution
+    - 0–39:   OPPOSING / INVERSE — counter-trend risk
+    """
+    from fastapi import HTTPException
+    from loguru import logger
+    try:
+        return await build_mtf_confluence()
+    except Exception as e:
+        logger.error(f"MTF confluence failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/hv-cone")
+async def get_hv_cone_route():
+    """
+    Historical Volatility Cone — HV at 5d, 10d, 20d, 30d, 60d lookbacks with
+    10th/25th/50th/75th/90th percentile bands from the past 252 trading days.
+    Overlay with current VIX to see whether IV is cheap or expensive at each horizon.
+    """
+    from fastapi import HTTPException
+    from loguru import logger
+    try:
+        return await get_hv_cone()
+    except Exception as e:
+        logger.error(f"HV cone failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/market-regime")
+async def get_market_regime():
+    """
+    Market regime classifier synthesising ADX, Bollinger bandwidth, ATR ratio, and VIX.
+    Output: trending_bullish | trending_bearish | breakout_imminent | mean_reverting | choppy
+    Each label carries actionable trader guidance.
+    """
+    from fastapi import HTTPException
+    from loguru import logger
+    try:
+        return await classify_market_regime()
+    except Exception as e:
+        logger.error(f"Market regime classification failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/cvd")
+async def get_cvd_route():
+    """
+    Cumulative Volume Delta (candle-based approximation).
+    Tracks intraday buying vs selling pressure from 1-min OHLCV candles.
+    Detects price/CVD divergences (distribution vs accumulation).
+    NOTE: Approximation — tick-level data unavailable via Upstox V2.
+    """
+    from app.services.cvd_service import get_cvd
+    try:
+        return await get_cvd()
+    except Exception as e:
+        logger.error(f"CVD failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/gex-velocity")
+async def get_gex_velocity_route(
+    expiry: str | None = Query(default=None, description="Target expiry YYYY-MM-DD"),
+):
+    """
+    Intraday GEX velocity — how fast is Gamma Exposure building or decaying?
+    Reads the last 2 hours of 5-min GEX snapshots and computes rate of change.
+    Rising GEX = MM hedging pressure increasing; Falling = hedging flows unwinding.
+    """
+    from app.services.gex_velocity_service import get_gex_velocity
+    try:
+        return await get_gex_velocity(target_expiry=expiry)
+    except Exception as e:
+        logger.error(f"GEX velocity failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/heavyweight-vwap")
+async def get_heavyweight_vwap_route():
+    """
+    Real-time VWAP divergence for Nifty's top 5 heavyweights
+    (HDFCBANK, RELIANCE, ICICIBANK, INFY, TCS — ~41% of index).
+    Signal valid if ≥3 of 5 trade above VWAP with expanding volume.
+    """
+    from app.services.heavyweight_vwap_service import get_heavyweight_vwap
+    try:
+        return await get_heavyweight_vwap()
+    except Exception as e:
+        logger.error(f"Heavyweight VWAP failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/signal-log")
+async def get_signal_log_route(
+    limit: int = Query(default=50, description="Max rows to return (newest first)"),
+):
+    """
+    Event-driven signal log. One row per state-change per source.
+    Includes CONFLUENCE rows (is_confluence=true) when 3+ sources align.
+    Outcome columns (30m, EOD, next_open) filled retroactively by the scheduler.
+    """
+    from app.services.signal_log_service import get_signal_log
+    try:
+        return await get_signal_log(limit=limit)
+    except Exception as e:
+        logger.error(f"Signal log failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))
+
+
+@router.get("/pivots")
+async def get_pivot_levels_route():
+    """
+    Weekly and monthly pivot levels for Nifty 50 (classic CPR + R1/R2/R3 / S1/S2/S3).
+    Uses last closed week and last closed month OHLC aggregated from daily candles.
+    """
+    from app.services.pivot_service import get_pivot_levels
+    try:
+        return await get_pivot_levels()
+    except Exception as e:
+        logger.error(f"Pivot levels failed: {e}")
+        raise HTTPException(status_code=502, detail=str(e))

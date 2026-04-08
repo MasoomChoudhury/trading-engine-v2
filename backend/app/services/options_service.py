@@ -121,8 +121,12 @@ def _ema(values: list[float], period: int) -> list[Optional[float]]:
     return result
 
 
-def compute_current_analytics(records: list[dict], expiry: str) -> dict:
-    """Compute all analytics from today's parsed chain snapshot."""
+def compute_current_analytics(records: list[dict], expiry: str, spot_up: bool | None = None) -> dict:
+    """Compute all analytics from today's parsed chain snapshot.
+
+    spot_up: today's price direction (open vs close from intraday candles).
+             Pass None when unknown — intent falls back to generic build/unwind.
+    """
     if not records:
         return {}
 
@@ -178,18 +182,47 @@ def compute_current_analytics(records: list[dict], expiry: str) -> dict:
     )
 
     # Today's OI change from prev_oi (ATM ± 500 pts)
-    oi_change_today = sorted(
-        [
-            {
-                "strike": r["strike"],
-                "ce_change": r["ce_oi"] - r["ce_prev_oi"],
-                "pe_change": r["pe_oi"] - r["pe_prev_oi"],
-            }
-            for r in records
-            if abs(r["strike"] - atm) <= 500
-        ],
-        key=lambda x: x["strike"],
-    )
+    # Price direction: positive if spot moved up vs prev close (use pcr_oi_prev as proxy for prev session)
+    # We approximate price direction from intraday candle data already captured in records where available
+    # Fallback: use sign of pcr change as proxy (not ideal — just flag neutral when ambiguous)
+    _spot_up: bool | None = None  # determined below after we have prev close
+
+    def _oi_intent(oi_change: int, price_up: bool | None, threshold: int = 10000) -> str:
+        """
+        Classify OI change intent using today's price direction (open vs close).
+          +OI  + price up   → fresh_long   (bullish build)
+          +OI  + price down → fresh_short  (bearish build)
+          -OI  + price up   → short_cover  (bears being squeezed)
+          -OI  + price down → long_exit    (bulls distributing)
+          |OI change| < threshold (10K) → flat → shows "—" in UI
+          price_up is None (no candle data) → build / unwind (no directional claim)
+        """
+        if abs(oi_change) < threshold:
+            return "flat"
+        if price_up is None:
+            return "build" if oi_change > 0 else "unwind"
+        if oi_change > 0:
+            return "fresh_long" if price_up else "fresh_short"
+        return "short_cover" if price_up else "long_exit"
+
+    # Price direction is fetched async by the caller (build_options_analytics)
+    # and passed in as spot_up. None → generic build/unwind labels.
+    _spot_up = spot_up
+
+    _oi_change_rows = []
+    for r in records:
+        if abs(r["strike"] - atm) > 500:
+            continue
+        ce_ch = r["ce_oi"] - r["ce_prev_oi"]
+        pe_ch = r["pe_oi"] - r["pe_prev_oi"]
+        _oi_change_rows.append({
+            "strike":    r["strike"],
+            "ce_change": ce_ch,
+            "pe_change": pe_ch,
+            "ce_intent": _oi_intent(ce_ch, _spot_up),
+            "pe_intent": _oi_intent(pe_ch, _spot_up),
+        })
+    oi_change_today = sorted(_oi_change_rows, key=lambda x: x["strike"])
 
     today = ist_today()
     return {
@@ -478,7 +511,33 @@ async def build_options_analytics(target_expiry: Optional[str] = None) -> dict:
     raw_chain = await fetch_chain(active_expiry)
     records = parse_chain(raw_chain)
 
-    current = compute_current_analytics(records, active_expiry)
+    # Fetch today's price direction for OI intent classification.
+    # open vs close of the first 5-min candle vs latest avoids the "spot > atm" trap.
+    _spot_up: bool | None = None
+    try:
+        from app.db.database import get_ts_session
+        from sqlalchemy import text as _stext
+        _ist = timezone(timedelta(hours=5, minutes=30))
+        _today = datetime.now(_ist).date().isoformat()
+        async with get_ts_session() as _sess:
+            _first = (await _sess.execute(_stext("""
+                SELECT open FROM candles
+                WHERE symbol = 'NSE_INDEX|Nifty 50' AND interval = '5min'
+                  AND DATE(timestamp AT TIME ZONE 'Asia/Kolkata') = :today
+                ORDER BY timestamp ASC LIMIT 1
+            """), {"today": _today})).fetchone()
+            _last = (await _sess.execute(_stext("""
+                SELECT close FROM candles
+                WHERE symbol = 'NSE_INDEX|Nifty 50' AND interval = '5min'
+                  AND DATE(timestamp AT TIME ZONE 'Asia/Kolkata') = :today
+                ORDER BY timestamp DESC LIMIT 1
+            """), {"today": _today})).fetchone()
+        if _first and _last:
+            _spot_up = float(_last[0]) > float(_first[0])
+    except Exception:
+        pass  # fallback → build/unwind labels
+
+    current = compute_current_analytics(records, active_expiry, spot_up=_spot_up)
     current.update({
         "near_expiry": near_expiry,
         "next_expiry": next_expiry,

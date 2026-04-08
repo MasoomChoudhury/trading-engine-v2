@@ -44,10 +44,22 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"FII table setup failed (non-critical): {e}")
 
-    # Ensure FII derivatives table exists
+    # Ensure FII derivatives table exists, then seed if empty
     try:
-        from app.services.fii_deriv_service import ensure_fii_deriv_table
+        from app.services.fii_deriv_service import (
+            ensure_fii_deriv_table, fetch_nse_participant_oi, store_fii_deriv, get_fii_derivatives,
+        )
         await ensure_fii_deriv_table()
+        # If table has no data yet, attempt a background seed from NSE
+        existing = await get_fii_derivatives(days=1)
+        if not existing.get("series"):
+            logger.info("FII deriv table empty — attempting initial seed from NSE")
+            records = await fetch_nse_participant_oi()
+            if records:
+                stored = await store_fii_deriv(records)
+                logger.info(f"FII deriv initial seed: {stored} records stored")
+            else:
+                logger.warning("FII deriv initial seed failed — no records from NSE (call /fii-derivatives/refresh after 6 PM IST)")
     except Exception as e:
         logger.warning(f"FII deriv table setup failed (non-critical): {e}")
 
@@ -57,6 +69,13 @@ async def lifespan(app: FastAPI):
         await ensure_straddle_table()
     except Exception as e:
         logger.warning(f"Straddle table setup failed (non-critical): {e}")
+
+    # Ensure signal log table exists
+    try:
+        from app.services.signal_log_service import ensure_signal_log_table
+        await ensure_signal_log_table()
+    except Exception as e:
+        logger.warning(f"Signal log table setup failed (non-critical): {e}")
 
     # Start background scheduler
     try:
